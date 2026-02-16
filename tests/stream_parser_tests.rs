@@ -30,7 +30,7 @@ fn test_parse_error_handling() {
 fn test_partial_json_delta_is_parsed() {
     let mut parser = StreamParser::new();
 
-    let chunk = b"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"path\\\":\\\"src/\"\"}}\n\n";
+    let chunk = b"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"path\\\":\\\"src/\"}}\n\n";
     let events = parser
         .process(chunk)
         .expect("parser should parse input_json deltas");

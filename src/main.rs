@@ -4,10 +4,8 @@ mod api;
 mod app;
 mod config;
 mod state;
-mod terminal;
 mod tools;
 mod types;
-mod ui;
 
 #[tokio::main]
 async fn main() -> Result<()> {

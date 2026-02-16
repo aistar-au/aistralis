@@ -78,3 +78,8 @@ When delegating to an agent, always use the following template to maintain the T
 | CRIT-01 | `src/state/conversation.rs` | Pending | Anthropic protocol mock test |
 | CRIT-02 | `src/types/api.rs` | Fixed | Serde flatten removed |
 | CRIT-03 | `src/app/mod.rs` | Verified | State sync test passes |
+## 🔒 Security Design: Lexical vs Canonical
+In **SEC-01**, we strictly forbid `std::fs::canonicalize()`. 
+- **Why:** Canonicalization requires the file to exist on the disk. 
+- **The Conflict:** If the AI agent attempts to use the `write_file` tool to create a *new* file, canonicalization will throw an error, preventing the tool from working.
+- **The Solution:** We use **Lexical Normalization**. This resolves `..` and `.` components in memory without touching the disk, allowing for secure path validation even for files that haven't been created yet.

@@ -60,7 +60,8 @@ pub enum StreamEvent {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Delta {
     #[serde(rename = "type")]
-    pub delta_type: String,
+    #[serde(default)]
+    pub delta_type: Option<String>,
     #[serde(default)]
     pub text: Option<String>,
     #[serde(default)]
@@ -82,18 +83,20 @@ pub struct MessageDelta {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     #[test]
     fn test_crit_02_regression() {
-        let msg = ApiMessage { 
-            role: "user".into(), 
-            content: Content::Text("Hello".into()) 
+        let msg = ApiMessage {
+            role: "user".into(),
+            content: Content::Text("Hello".into()),
         };
         let serialized = serde_json::to_value(&msg).unwrap();
-        
+
         // ANCHOR: This assertion will FAIL if #[serde(flatten)] is present
         // because the "content" key will be missing from the object.
-        assert!(serialized.get("content").is_some(), "Missing 'content' key in JSON!");
+        assert!(
+            serialized.get("content").is_some(),
+            "Missing 'content' key in JSON!"
+        );
     }
 }

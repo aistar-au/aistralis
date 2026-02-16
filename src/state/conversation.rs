@@ -3,12 +3,18 @@ use crate::tools::ToolExecutor;
 use crate::types::{ApiMessage, Content, ContentBlock, StreamEvent};
 use anyhow::Result;
 use futures::StreamExt;
+#[cfg(test)]
+use std::collections::HashMap;
+#[cfg(test)]
+use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 
 pub struct ConversationManager {
     client: ApiClient,
     tool_executor: ToolExecutor,
     api_messages: Vec<ApiMessage>,
+    #[cfg(test)]
+    mock_tool_executor_responses: Option<Arc<Mutex<HashMap<String, String>>>>,
 }
 
 impl ConversationManager {
@@ -17,6 +23,18 @@ impl ConversationManager {
             client,
             tool_executor: executor,
             api_messages: Vec::new(),
+            #[cfg(test)]
+            mock_tool_executor_responses: None,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn new_mock(client: ApiClient, tool_executor_responses: HashMap<String, String>) -> Self {
+        Self {
+            client,
+            tool_executor: ToolExecutor::new(std::path::PathBuf::from("/tmp")), // Dummy executor
+            api_messages: Vec::new(),
+            mock_tool_executor_responses: Some(Arc::new(Mutex::new(tool_executor_responses))),
         }
     }
 
@@ -135,24 +153,56 @@ impl ConversationManager {
     }
 
     async fn execute_tool(&self, name: &str, input: &serde_json::Value) -> Result<String> {
+        let get_str = |key: &str| input.get(key).and_then(|v| v.as_str()).unwrap_or("");
+        let get_bool =
+            |key: &str, default: bool| input.get(key).and_then(|v| v.as_bool()).unwrap_or(default);
+        let get_usize = |key: &str, default: usize| {
+            input
+                .get(key)
+                .and_then(|v| v.as_u64())
+                .map(|v| v as usize)
+                .unwrap_or(default)
+        };
+
+        #[cfg(test)]
+        {
+            if let Some(responses_arc) = &self.mock_tool_executor_responses {
+                let responses = responses_arc.lock().unwrap();
+                if name == "read_file" {
+                    let path = get_str("path");
+                    if let Some(content) = responses.get(path) {
+                        return Ok(content.clone());
+                    } else {
+                        return Err(anyhow::anyhow!(
+                            "Mock tool 'read_file' not configured for path: {}",
+                            path
+                        ));
+                    }
+                }
+            }
+        }
         match name {
-            "read_file" => {
-                let path = input["path"].as_str().unwrap_or("");
-                self.tool_executor.read_file(path)
-            }
-            "write_file" => {
-                let path = input["path"].as_str().unwrap_or("");
-                let content = input["content"].as_str().unwrap_or("");
-                self.tool_executor.write_file(path, content)?;
-                Ok(format!("Successfully wrote to {path}"))
-            }
-            "edit_file" => {
-                let path = input["path"].as_str().unwrap_or("");
-                let old_str = input["old_str"].as_str().unwrap_or("");
-                let new_str = input["new_str"].as_str().unwrap_or("");
-                self.tool_executor.edit_file(path, old_str, new_str)?;
-                Ok(format!("Successfully edited {path}"))
-            }
+            "read_file" => self.tool_executor.read_file(get_str("path")),
+            "write_file" => self
+                .tool_executor
+                .write_file(get_str("path"), get_str("content"))
+                .map(|_| format!("Successfully wrote to {}", get_str("path"))),
+            "edit_file" => self
+                .tool_executor
+                .edit_file(get_str("path"), get_str("old_str"), get_str("new_str"))
+                .map(|_| format!("Successfully edited {}", get_str("path"))),
+            "git_status" => self.tool_executor.git_status(
+                get_bool("short", true),
+                input.get("path").and_then(|v| v.as_str()),
+            ),
+            "git_diff" => self.tool_executor.git_diff(
+                get_bool("cached", false),
+                input.get("path").and_then(|v| v.as_str()),
+            ),
+            "git_log" => self.tool_executor.git_log(get_usize("max_count", 10)),
+            "git_show" => self.tool_executor.git_show(get_str("revision")),
+            "git_add" => self.tool_executor.git_add(get_str("path")),
+            "git_commit" => self.tool_executor.git_commit(get_str("message")),
             _ => Ok(format!("Unknown tool: {name}")),
         }
     }
@@ -162,23 +212,116 @@ impl ConversationManager {
 mod tests {
     use super::*;
     use crate::api::ApiClient;
-    use crate::config::Config;
-    use crate::tools::ToolExecutor;
+    use serde_json::json;
 
-    #[test]
-    fn test_crit_01_protocol_flow() {
+    #[tokio::test]
+    async fn test_crit_01_protocol_flow() -> Result<()> {
         // ANCHOR: This test verifies the multi-turn conversation protocol.
-        // It will FAIL until a mock API client is implemented.
-        // 
+        // It will PASS if the protocol is correctly implemented.
+        //
         // The test should:
         // 1. Create a ConversationManager with a mock client
         // 2. Send a message that triggers tool use
         // 3. Verify the tool is executed
         // 4. Verify the final response incorporates tool results
-        //
-        // Current status: INCOMPLETE - needs mock ApiClient implementation
-        
-        // Placeholder assertion - this test needs the mock infrastructure
-        assert!(false, "CRIT-01: Mock API client not yet implemented. See TASKS/CRIT-01-protocol.md");
+
+        // Mock responses for the API client
+        let first_response_sse = vec![
+            r#"event: message_start
+data: {"type": "message_start", "message": {"id": "msg_mock_01", "type": "message", "role": "assistant", "model": "mock-model", "content": [], "stop_reason": null, "stop_sequence": null, "usage": {"input_tokens": 10, "output_tokens": 1}}}"#.to_string(),
+            r#"event: content_block_start
+data: {"type": "content_block_start", "index":0,"content_block":{"type":"text","text":""}}"#.to_string(),
+            r#"event: content_block_delta
+data: {"type": "content_block_delta", "index":0,"delta":{"type":"text_delta","text":"Okay, I can help with that. "}}"#.to_string(),
+            r#"event: content_block_start
+data: {"type": "content_block_start", "index":1,"content_block":{"type":"tool_use","id":"toolu_mock_01", "name":"read_file","input":{}}}"#.to_string(),
+            r#"event: content_block_delta
+data: {"type": "content_block_delta", "index":1,"delta":{"type":"input_json_delta","partial_json":"{\"path\": \"file.txt\"}"}}"#.to_string(),
+            r#"event: content_block_stop
+data: {"type": "content_block_stop", "index":1}"#.to_string(),
+            r#"event: message_delta
+data: {"type": "message_delta", "delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":6}}"#.to_string(),
+            r#"event: message_stop
+data: {"type": "message_stop"}"#.to_string(),
+        ];
+
+        let second_response_sse = vec![
+            r#"event: message_start
+data: {"type": "message_start", "message": {"id": "msg_mock_02", "type": "message", "role": "assistant", "model": "mock-model", "content": [], "stop_reason": null, "stop_sequence": null, "usage": {"input_tokens": 10, "output_tokens": 1}}}"#.to_string(),
+            r#"event: content_block_start
+data: {"type": "content_block_start", "index":0,"content_block":{"type":"text","text":""}}"#.to_string(),
+            r#"event: content_block_delta
+data: {"type": "content_block_delta", "index":0,"delta":{"type":"text_delta","text":"The content of file.txt is 'Hello from file.txt'"}}"#.to_string(),
+            r#"event: message_delta
+data: {"type": "message_delta", "delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":10}}"#.to_string(),
+            r#"event: message_stop
+data: {"type": "message_stop"}"#.to_string(),
+        ];
+
+        let mock_api_client =
+            ApiClient::new_mock(Arc::new(crate::api::mock_client::MockApiClient::new(vec![
+                first_response_sse,
+                second_response_sse,
+            ])));
+
+        let mut mock_tool_responses = HashMap::new();
+        mock_tool_responses.insert("file.txt".to_string(), "Hello from file.txt".to_string());
+
+        let mut manager = ConversationManager::new_mock(mock_api_client, mock_tool_responses);
+
+        let final_text = manager
+            .send_message("What is in file.txt?".into(), None)
+            .await?;
+
+        assert!(final_text.contains("The content of file.txt is 'Hello from file.txt'"));
+
+        // Verify the message history order
+        let messages = &manager.api_messages;
+        assert_eq!(messages.len(), 4);
+
+        // Initial user message
+        assert_eq!(messages[0].role, "user");
+        if let Content::Text(text) = &messages[0].content {
+            assert!(text.contains("What is in file.txt?"));
+        }
+
+        // Assistant message with tool_use
+        assert_eq!(messages[1].role, "assistant");
+        if let Content::Blocks(blocks) = &messages[1].content {
+            assert_eq!(blocks.len(), 2);
+            if let ContentBlock::Text { text } = &blocks[0] {
+                assert!(text.contains("Okay, I can help with that."));
+            }
+            if let ContentBlock::ToolUse { id: _, name, input } = &blocks[1] {
+                assert_eq!(name, "read_file");
+                assert_eq!(input, &json!({ "path": "file.txt" }));
+            }
+        }
+
+        // User message with tool_result
+        assert_eq!(messages[2].role, "user");
+        if let Content::Blocks(blocks) = &messages[2].content {
+            assert_eq!(blocks.len(), 1);
+            if let ContentBlock::ToolResult {
+                tool_use_id: _,
+                content,
+                is_error,
+            } = &blocks[0]
+            {
+                assert!(content.contains("Hello from file.txt"));
+                assert!(!is_error);
+            }
+        }
+
+        // Final assistant message
+        assert_eq!(messages[3].role, "assistant");
+        if let Content::Blocks(blocks) = &messages[3].content {
+            assert_eq!(blocks.len(), 1);
+            if let ContentBlock::Text { text } = &blocks[0] {
+                assert!(text.contains("The content of file.txt is 'Hello from file.txt'"));
+            }
+        }
+
+        Ok(())
     }
 }

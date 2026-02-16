@@ -1,10 +1,9 @@
 use crate::config::Config;
 use crate::state::ConversationManager;
-use crate::terminal::{self, TerminalType};
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyModifiers};
+use crossterm::style::Stylize;
+use std::io::{self, Write};
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::sync::{mpsc, Mutex};
 use tokio::task;
 
@@ -15,23 +14,19 @@ pub enum UiUpdate {
 }
 
 pub struct App {
-    terminal: TerminalType,
-    conversation: Arc<Mutex<ConversationManager>>,
     update_rx: mpsc::UnboundedReceiver<UiUpdate>,
     message_tx: mpsc::UnboundedSender<String>,
-    input: String,
-    cursor_pos: usize,
-    messages: Vec<String>,
-    scroll: usize,
-    visible_message_height: usize,
-    active_assistant_stream: bool,
     should_quit: bool,
+}
+
+#[derive(Debug, Clone)]
+struct CodeSnippet {
+    language: String,
+    body: String,
 }
 
 impl App {
     pub fn new(config: Config) -> Result<Self> {
-        let terminal = terminal::setup()?;
-
         let (update_tx, update_rx) = mpsc::unbounded_channel();
         let (message_tx, mut message_rx) = mpsc::unbounded_channel();
 
@@ -68,53 +63,38 @@ impl App {
         });
 
         Ok(Self {
-            terminal,
-            conversation,
             update_rx,
             message_tx,
-            input: String::new(),
-            cursor_pos: 0,
-            messages: Vec::new(),
-            scroll: 0,
-            visible_message_height: 20,
-            active_assistant_stream: false,
             should_quit: false,
         })
     }
 
     pub async fn run(&mut self) -> Result<()> {
+        println!(
+            "{}",
+            "aistar text mode • type /quit to exit • streaming enabled".dark_grey()
+        );
+
         loop {
-            let messages = self.messages.clone();
-            let input = self.input.clone();
-            let cursor_pos = self.cursor_pos;
-            let scroll = self.scroll;
-            let visible_message_height = &mut self.visible_message_height;
-            
-            self.terminal.draw(|f| {
-                use ratatui::layout::{Constraint, Direction, Layout};
+            self.print_prompt()?;
 
-                let chunks = Layout::default()
-                    .direction(Direction::Vertical)
-                    .constraints([Constraint::Min(10), Constraint::Length(3)])
-                    .split(f.area());
+            let mut input = String::new();
+            let read = io::stdin().read_line(&mut input)?;
+            if read == 0 {
+                break;
+            }
 
-                *visible_message_height = chunks[0].height.saturating_sub(2) as usize;
-
-                crate::ui::render::render_messages(f, chunks[0], &messages, scroll);
-                crate::ui::render::render_input(f, chunks[1], &input, cursor_pos);
-            })?;
-
-            tokio::select! {
-                Some(update) = self.update_rx.recv() => {
-                    self.handle_update(update);
-                }
-                _ = tokio::time::sleep(Duration::from_millis(16)) => {
-                    if event::poll(Duration::from_millis(0))? {
-                        if let Event::Key(key) = event::read()? {
-                            self.handle_key(key)?;
-                        }
-                    }
-                }
+            let content = input.trim().to_string();
+            if content.is_empty() {
+                continue;
+            }
+            if matches!(
+                content.as_str(),
+                "q" | "quit" | "exit" | "/q" | "/quit" | "/exit"
+            ) {
+                self.should_quit = true;
+            } else {
+                self.render_turn(content).await?;
             }
 
             if self.should_quit {
@@ -122,108 +102,104 @@ impl App {
             }
         }
 
-        terminal::restore()?;
         Ok(())
     }
 
-    fn char_to_byte_pos(&self, char_pos: usize) -> usize {
-        self.input
-            .char_indices()
-            .nth(char_pos)
-            .map(|(idx, _)| idx)
-            .unwrap_or(self.input.len())
-    }
-
-    fn clamp_scroll(&mut self) {
-        let max_scroll = self
-            .messages
-            .len()
-            .saturating_sub(self.visible_message_height.max(1));
-        if self.scroll > max_scroll {
-            self.scroll = max_scroll;
-        }
-    }
-
-    fn handle_key(&mut self, key: event::KeyEvent) -> Result<()> {
-        match (key.code, key.modifiers) {
-            (KeyCode::Char('q'), KeyModifiers::CONTROL)
-            | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
-                self.should_quit = true;
-            }
-            (KeyCode::Char(c), KeyModifiers::NONE) | (KeyCode::Char(c), KeyModifiers::SHIFT) => {
-                let byte_pos = self.char_to_byte_pos(self.cursor_pos);
-                self.input.insert(byte_pos, c);
-                self.cursor_pos += 1;
-            }
-            (KeyCode::Backspace, _) => {
-                if self.cursor_pos > 0 {
-                    let byte_pos = self.char_to_byte_pos(self.cursor_pos - 1);
-                    self.input.remove(byte_pos);
-                    self.cursor_pos -= 1;
-                }
-            }
-            (KeyCode::Enter, _) => {
-                if !self.input.is_empty() {
-                    let content: String = self.input.drain(..).collect();
-                    self.cursor_pos = 0;
-                    self.messages.push(format!("You: {content}"));
-                    self.active_assistant_stream = false;
-                    let _ = self.message_tx.send(content);
-                    self.clamp_scroll();
-                }
-            }
-            (KeyCode::Up, _) => {
-                if self.scroll > 0 {
-                    self.scroll -= 1;
-                }
-            }
-            (KeyCode::Down, _) => {
-                let max_scroll = self
-                    .messages
-                    .len()
-                    .saturating_sub(self.visible_message_height.max(1));
-                if self.scroll < max_scroll {
-                    self.scroll += 1;
-                }
-            }
-            _ => {}
-        }
+    fn print_prompt(&self) -> Result<()> {
+        print!("{} ", ">".dark_grey());
+        io::stdout().flush()?;
         Ok(())
     }
 
-    fn handle_update(&mut self, update: UiUpdate) {
-        match update {
-            UiUpdate::StreamDelta(text) => {
-                if !self.active_assistant_stream {
-                    self.messages.push("Assistant: ".to_string());
-                    self.active_assistant_stream = true;
+    async fn render_turn(&mut self, content: String) -> Result<()> {
+        let _ = self.message_tx.send(content);
+
+        let mut final_text: Option<String> = None;
+        while final_text.is_none() {
+            match self.update_rx.recv().await {
+                Some(UiUpdate::StreamDelta(text)) => {
+                    print!("{text}");
+                    io::stdout().flush()?;
                 }
-                if let Some(last) = self.messages.last_mut() {
-                    last.push_str(&text);
+                Some(UiUpdate::TurnComplete(text)) => {
+                    final_text = Some(text);
                 }
-                self.clamp_scroll();
-            }
-            UiUpdate::TurnComplete(text) => {
-                if self.active_assistant_stream {
-                    if let Some(last) = self.messages.last_mut() {
-                        *last = format!("Assistant: {text}");
-                    }
-                } else {
-                    self.messages.push(format!("Assistant: {text}"));
+                Some(UiUpdate::Error(err)) => {
+                    println!();
+                    println!("{}", format!("error: {err}").red());
+                    final_text = Some(String::new());
                 }
-                self.active_assistant_stream = false;
-                self.scroll = self
-                    .messages
-                    .len()
-                    .saturating_sub(self.visible_message_height.max(1));
-            }
-            UiUpdate::Error(err) => {
-                self.messages.push(format!("⚠️  Error: {err}"));
-                self.active_assistant_stream = false;
-                self.clamp_scroll();
+                None => break,
             }
         }
+
+        println!();
+        if let Some(text) = final_text {
+            self.print_numbered_code_snippets(&text);
+        }
+        println!();
+        Ok(())
     }
+
+    fn print_numbered_code_snippets(&self, text: &str) {
+        let snippets = extract_code_snippets(text);
+        if snippets.is_empty() {
+            return;
+        }
+
+        println!("{}", "code snippets".dark_grey());
+        for (idx, snippet) in snippets.iter().enumerate() {
+            if snippet.language.is_empty() {
+                println!("{}", format!("[{}]", idx + 1).dark_grey());
+            } else {
+                println!(
+                    "{}",
+                    format!("[{}] {}", idx + 1, snippet.language).dark_grey()
+                );
+            }
+
+            if snippet.body.is_empty() {
+                println!("   1 |");
+                continue;
+            }
+
+            for (line_no, line) in snippet.body.lines().enumerate() {
+                println!("{:>4} | {}", line_no + 1, line);
+            }
+            println!();
+        }
+    }
+}
+
+fn extract_code_snippets(text: &str) -> Vec<CodeSnippet> {
+    let mut snippets = Vec::new();
+    let mut in_block = false;
+    let mut current_lang = String::new();
+    let mut current_lines = Vec::new();
+
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("```") {
+            if in_block {
+                snippets.push(CodeSnippet {
+                    language: current_lang.clone(),
+                    body: current_lines.join("\n"),
+                });
+                in_block = false;
+                current_lang.clear();
+                current_lines.clear();
+            } else {
+                in_block = true;
+                current_lang = rest.trim().to_string();
+            }
+            continue;
+        }
+
+        if in_block {
+            current_lines.push(line.to_string());
+        }
+    }
+
+    snippets
 }
 
 #[cfg(test)]
@@ -240,5 +216,16 @@ mod tests {
         });
         handle.await.unwrap();
         assert_eq!(state.load(Ordering::SeqCst), 42);
+    }
+
+    #[test]
+    fn test_extract_code_snippets_numbering_ready() {
+        let text = "first\n```rust\nlet x = 1;\n```\nthen\n```txt\nhello\nworld\n```";
+        let snippets = extract_code_snippets(text);
+        assert_eq!(snippets.len(), 2);
+        assert_eq!(snippets[0].language, "rust");
+        assert_eq!(snippets[0].body, "let x = 1;");
+        assert_eq!(snippets[1].language, "txt");
+        assert_eq!(snippets[1].body, "hello\nworld");
     }
 }

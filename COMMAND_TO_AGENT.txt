@@ -1,0 +1,8 @@
+Refer to CONTRIBUTING.md for the TDM workflow. 
+Execute TASKS/CRIT-01-protocol.md by modifying src/state/conversation.rs.
+
+1. Implement the multi-turn loop in send_message().
+2. Ensure Assistant 'tool_use' blocks are pushed to history first.
+3. Ensure User 'tool_result' blocks follow immediately in a new message.
+4. Verify your logic using the 'test_crit_01_protocol_flow' anchor.
+5. Run 'cargo test' to ensure no regressions in CRIT-02 or CRIT-03.
