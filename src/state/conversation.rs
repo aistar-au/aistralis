@@ -1,5 +1,6 @@
 use super::stream_block::{StreamBlock, ToolStatus};
 use crate::api::{stream::StreamParser, ApiClient};
+use crate::edit_diff::{format_edit_hunks, DEFAULT_EDIT_DIFF_CONTEXT_LINES};
 use crate::tools::ToolExecutor;
 use crate::types::{ApiMessage, Content, ContentBlock, StreamEvent};
 use anyhow::bail;
@@ -832,23 +833,24 @@ fn preview_edit_file_input(input: &serde_json::Value) -> String {
     let mut out = String::new();
     out.push_str(&format!("path: {path}\n"));
     out.push_str(&format!(
-        "old_str: {} chars, {} lines\n",
+        "change: {} chars/{} lines -> {} chars/{} lines\n",
         old_str.chars().count(),
         old_str
             .lines()
             .count()
-            .max(usize::from(!old_str.is_empty()))
-    ));
-    out.push_str(&preview_lines('-', old_str, usize::MAX, 1));
-    out.push_str(&format!(
-        "new_str: {} chars, {} lines\n",
+            .max(usize::from(!old_str.is_empty())),
         new_str.chars().count(),
         new_str
             .lines()
             .count()
             .max(usize::from(!new_str.is_empty()))
     ));
-    out.push_str(&preview_lines('+', new_str, usize::MAX, 1));
+    out.push_str(&format_edit_hunks(
+        old_str,
+        new_str,
+        "  ",
+        DEFAULT_EDIT_DIFF_CONTEXT_LINES,
+    ));
     out
 }
 

@@ -1,4 +1,5 @@
 use crate::config::Config;
+use crate::edit_diff::{format_edit_hunks, DEFAULT_EDIT_DIFF_CONTEXT_LINES};
 use crate::state::{
     ConversationManager, ConversationStreamUpdate, StreamBlock, ToolApprovalRequest, ToolStatus,
 };
@@ -530,10 +531,24 @@ impl StreamPrinter {
 
                 let header = format!("* edited {path}");
                 self.print_activity_header(LineStyle::Tool, &header)?;
-                self.render_blob_metadata("old_str", old_str)?;
-                self.render_blob_numbered_lines(old_str, Some('-'))?;
-                self.render_blob_metadata("new_str", new_str)?;
-                self.render_blob_numbered_lines(new_str, Some('+'))?;
+                self.set_style(LineStyle::Event);
+                println!(
+                    "    change: {} chars/{} lines -> {} chars/{} lines",
+                    old_str.chars().count(),
+                    old_str
+                        .lines()
+                        .count()
+                        .max(usize::from(!old_str.is_empty())),
+                    new_str.chars().count(),
+                    new_str
+                        .lines()
+                        .count()
+                        .max(usize::from(!new_str.is_empty()))
+                );
+                io::stdout().flush()?;
+                let hunks =
+                    format_edit_hunks(old_str, new_str, "    ", DEFAULT_EDIT_DIFF_CONTEXT_LINES);
+                self.render_diff_lines(&hunks)?;
                 Ok(true)
             }
             "write_file" => {
@@ -567,7 +582,10 @@ impl StreamPrinter {
     }
 
     fn render_blob_metadata(&mut self, label: &str, content: &str) -> Result<()> {
-        let line_count = content.lines().count().max(usize::from(!content.is_empty()));
+        let line_count = content
+            .lines()
+            .count()
+            .max(usize::from(!content.is_empty()));
         self.set_style(LineStyle::Event);
         println!(
             "    {label}: {} chars, {} lines",
@@ -578,7 +596,11 @@ impl StreamPrinter {
         Ok(())
     }
 
-    fn render_blob_numbered_lines(&mut self, content: &str, diff_marker: Option<char>) -> Result<()> {
+    fn render_blob_numbered_lines(
+        &mut self,
+        content: &str,
+        diff_marker: Option<char>,
+    ) -> Result<()> {
         if content.is_empty() {
             let line = match diff_marker {
                 Some(marker) => format!("    1 {marker} <empty>"),
@@ -605,6 +627,20 @@ impl StreamPrinter {
                 line_style(&line, false, self.colors_enabled)
             } else {
                 LineStyle::Event
+            };
+            self.set_style(style);
+            println!("{line}");
+        }
+        io::stdout().flush()?;
+        Ok(())
+    }
+
+    fn render_diff_lines(&mut self, rendered: &str) -> Result<()> {
+        for line in rendered.lines() {
+            let style = match line_style(line, false, self.colors_enabled) {
+                LineStyle::Add => LineStyle::Add,
+                LineStyle::Delete => LineStyle::Delete,
+                _ => LineStyle::Event,
             };
             self.set_style(style);
             println!("{line}");
@@ -1252,17 +1288,24 @@ fn structured_preview_edit_file_input(input: &serde_json::Value) -> String {
     let mut out = String::new();
     out.push_str(&format!("path: {path}\n"));
     out.push_str(&format!(
-        "old_str: {} chars, {} lines\n",
+        "change: {} chars/{} lines -> {} chars/{} lines\n",
         old_str.chars().count(),
-        old_str.lines().count().max(usize::from(!old_str.is_empty()))
-    ));
-    out.push_str(&structured_preview_lines(old_str, Some('-')));
-    out.push_str(&format!(
-        "new_str: {} chars, {} lines\n",
+        old_str
+            .lines()
+            .count()
+            .max(usize::from(!old_str.is_empty())),
         new_str.chars().count(),
-        new_str.lines().count().max(usize::from(!new_str.is_empty()))
+        new_str
+            .lines()
+            .count()
+            .max(usize::from(!new_str.is_empty()))
     ));
-    out.push_str(&structured_preview_lines(new_str, Some('+')));
+    out.push_str(&format_edit_hunks(
+        old_str,
+        new_str,
+        "    ",
+        DEFAULT_EDIT_DIFF_CONTEXT_LINES,
+    ));
     out
 }
 
@@ -1278,7 +1321,10 @@ fn structured_preview_write_file_input(input: &serde_json::Value) -> String {
     out.push_str(&format!(
         "content: {} chars, {} lines\n",
         content.chars().count(),
-        content.lines().count().max(usize::from(!content.is_empty()))
+        content
+            .lines()
+            .count()
+            .max(usize::from(!content.is_empty()))
     ));
     out.push_str(&structured_preview_lines(content, Some('+')));
     out
@@ -1569,12 +1615,11 @@ mod tests {
 
         let preview = structured_tool_input_preview("edit_file", &input);
         assert!(preview.contains("path: cal.rs"));
-        assert!(preview.contains("old_str:"));
-        assert!(preview.contains("new_str:"));
+        assert!(preview.contains("change:"));
+        assert!(preview.contains("@@ -1,2 +1,4 @@"));
         assert!(preview.contains("    1 - fn a() {}"));
-        assert!(preview.contains("    2 - fn b() {}"));
         assert!(preview.contains("    1 + fn a() {"));
-        assert!(preview.contains("    4 + fn b() {}"));
+        assert!(preview.contains("    2   fn b() {}"));
     }
 
     #[test]

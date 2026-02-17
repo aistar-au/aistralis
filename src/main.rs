@@ -3,6 +3,7 @@ use anyhow::Result;
 mod api;
 mod app;
 mod config;
+mod edit_diff;
 mod state;
 mod tools;
 mod types;
