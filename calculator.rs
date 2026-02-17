@@ -40,24 +40,6 @@ fn evaluate_expression(expression: &str) -> Result<f64, String> {
             }
             Err(_) => Err("Invalid number for square root".to_string()),
         }
-    } else if parts.len() == 3 && parts[0] == "radical" {
-        // Handle nth root operation
-        let n = parts[1].parse::<f64>();
-        let num = parts[2].parse::<f64>();
-        
-        match (n, num) {
-            (Ok(n), Ok(number)) => {
-                if number < 0.0 && n.fract() != 0.0 {
-                    Err("Cannot calculate fractional root of negative number".to_string())
-                } else if n == 0.0 {
-                    Err("Cannot calculate zeroth root".to_string())
-                } else {
-                    Ok(number.powf(1.0 / n))
-                }
-            }
-            (Err(_), _) => Err("Invalid root value".to_string()),
-            (_, Err(_)) => Err("Invalid number for root".to_string()),
-        }
     } else if parts.len() == 3 {
         // Handle binary operations
         let num1 = parts[0].parse::<f64>();
@@ -84,6 +66,6 @@ fn evaluate_expression(expression: &str) -> Result<f64, String> {
             (_, Err(_)) => Err("Second operand is not a valid number".to_string()),
         }
     } else {
-        Err("Invalid expression format. Expected: number operator number or sqrt number or radical root_number number".to_string())
+        Err("Invalid expression format. Expected: number operator number or sqrt number".to_string())
     }
 }

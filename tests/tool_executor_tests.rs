@@ -62,6 +62,68 @@ fn test_edit_file_ambiguous() {
 }
 
 #[test]
+fn test_edit_file_rejects_whole_file_replacement() {
+    let temp = TempDir::new().expect("temp dir");
+    let executor = ToolExecutor::new(temp.path().to_path_buf());
+
+    let original = "line one\nline two\n";
+    executor
+        .write_file("test.txt", original)
+        .expect("seed file");
+
+    let result = executor.edit_file("test.txt", original, "replaced\n");
+    assert!(result.is_err());
+    assert!(result
+        .expect_err("full-file replacement should be rejected")
+        .to_string()
+        .contains("refuses full-file replacement"));
+}
+
+#[test]
+fn test_edit_file_rejects_oversized_snippets() {
+    let temp = TempDir::new().expect("temp dir");
+    let executor = ToolExecutor::new(temp.path().to_path_buf());
+
+    let mut original = String::new();
+    for i in 0..120 {
+        original.push_str(&format!("line {i}\n"));
+    }
+    executor
+        .write_file("test.txt", &original)
+        .expect("seed file for large edit");
+
+    let result = executor.edit_file("test.txt", &original, "replacement\n");
+    assert!(result.is_err());
+    assert!(result
+        .expect_err("oversized edit snippets should be rejected")
+        .to_string()
+        .contains("requires focused snippets"));
+}
+
+#[cfg(unix)]
+#[test]
+fn test_symlink_escape_is_blocked_for_file_tools() {
+    use std::os::unix::fs::symlink;
+
+    let workspace = TempDir::new().expect("workspace");
+    let outside = TempDir::new().expect("outside");
+    let executor = ToolExecutor::new(workspace.path().to_path_buf());
+
+    fs::write(outside.path().join("secret.txt"), "secret\n").expect("seed outside file");
+    symlink(
+        outside.path().join("secret.txt"),
+        workspace.path().join("link.txt"),
+    )
+    .expect("create file symlink");
+    assert!(executor.read_file("link.txt").is_err());
+    assert!(executor.edit_file("link.txt", "secret", "public").is_err());
+
+    symlink(outside.path(), workspace.path().join("out")).expect("create dir symlink");
+    assert!(executor.write_file("out/pwn.txt", "x").is_err());
+    assert!(executor.list_files(Some("out"), 50).is_err());
+}
+
+#[test]
 fn test_rename_file() {
     let temp = TempDir::new().expect("temp dir");
     let executor = ToolExecutor::new(temp.path().to_path_buf());

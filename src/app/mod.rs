@@ -1,17 +1,26 @@
 use crate::config::Config;
-use crate::state::{ConversationManager, ConversationStreamUpdate, ToolApprovalRequest};
+use crate::state::{
+    ConversationManager, ConversationStreamUpdate, StreamBlock, ToolApprovalRequest, ToolStatus,
+};
 use anyhow::Result;
+use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode, size as terminal_size};
 use std::io::{self, IsTerminal, Write};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, Mutex};
 use tokio::task;
 
-const ACTIVITY_MARKER: &str = "*";
 const THINKING_MAX_LINES: usize = 4;
 const DEFAULT_THINKING_WRAP_WIDTH: usize = 96;
+const CURSOR_BLINK_INTERVAL: Duration = Duration::from_millis(530);
+const DEFAULT_FRAME_INTERVAL: Duration = Duration::from_millis(16);
 
 pub enum UiUpdate {
     StreamDelta(String),
+    StreamBlockStart { index: usize, block: StreamBlock },
+    StreamBlockDelta { index: usize, delta: String },
+    StreamBlockComplete { index: usize },
     ToolApprovalRequest(ToolApprovalRequest),
     TurnComplete(String),
     Error(String),
@@ -38,12 +47,16 @@ enum LineStyle {
 enum BlockKind {
     Normal,
     Thinking,
+    Response,
     Tool,
     Event,
 }
 
 struct StreamPrinter {
     current_line: String,
+    pending_tokens: String,
+    active_blocks: Vec<StreamBlock>,
+    activity_blob_count: usize,
     streamed_any_delta: bool,
     active_style: LineStyle,
     active_block: BlockKind,
@@ -52,12 +65,27 @@ struct StreamPrinter {
     code_line_number: usize,
     thinking_rendered_lines: usize,
     thinking_wrap_width: usize,
+    cursor_visible: bool,
+    cursor_blink_phase: bool,
+    last_cursor_toggle: Instant,
+    last_frame_render: Instant,
+    frame_interval: Duration,
+    cursor_drawn: bool,
+    progressive_effects_enabled: bool,
+    cursor_enabled: bool,
+    frame_batching_enabled: bool,
+    structured_blocks_enabled: bool,
+    turn_active: bool,
 }
 
 impl StreamPrinter {
     fn new() -> Self {
+        let frame_interval = resolve_frame_interval();
         Self {
             current_line: String::new(),
+            pending_tokens: String::new(),
+            active_blocks: Vec::new(),
+            activity_blob_count: 0,
             streamed_any_delta: false,
             active_style: LineStyle::Normal,
             active_block: BlockKind::Normal,
@@ -66,23 +94,101 @@ impl StreamPrinter {
             code_line_number: 1,
             thinking_rendered_lines: 0,
             thinking_wrap_width: resolve_thinking_wrap_width(),
+            cursor_visible: false,
+            cursor_blink_phase: false,
+            last_cursor_toggle: Instant::now(),
+            last_frame_render: Instant::now(),
+            frame_interval,
+            cursor_drawn: false,
+            progressive_effects_enabled: !disable_progressive_effects(),
+            cursor_enabled: !disable_cursor(),
+            frame_batching_enabled: !disable_frame_batching(),
+            structured_blocks_enabled: use_structured_blocks(),
+            turn_active: false,
         }
     }
 
     fn begin_turn(&mut self) {
         self.streamed_any_delta = false;
         self.current_line.clear();
+        self.pending_tokens.clear();
+        self.active_blocks.clear();
+        self.activity_blob_count = 0;
         self.active_block = BlockKind::Normal;
         self.in_code_block = false;
         self.code_line_number = 1;
         self.thinking_rendered_lines = 0;
+        self.cursor_visible = false;
+        self.cursor_blink_phase = false;
+        self.last_cursor_toggle = Instant::now();
+        self.last_frame_render = Instant::now();
+        self.cursor_drawn = false;
+        self.thinking_wrap_width = resolve_thinking_wrap_width();
+        self.turn_active = true;
     }
 
     fn has_streamed_delta(&self) -> bool {
         self.streamed_any_delta
     }
 
+    fn frame_interval(&self) -> Duration {
+        self.frame_interval
+    }
+
+    fn buffer_token(&mut self, token: &str) -> Result<()> {
+        if token.is_empty() {
+            return Ok(());
+        }
+
+        self.streamed_any_delta = true;
+        self.cursor_visible = self.cursor_enabled;
+        if self.frame_batching_enabled {
+            self.pending_tokens.push_str(token);
+            return Ok(());
+        }
+
+        self.write_chunk(token)?;
+        self.last_frame_render = Instant::now();
+        Ok(())
+    }
+
+    fn should_flush_frame(&self) -> bool {
+        self.frame_batching_enabled
+            && !self.pending_tokens.is_empty()
+            && self.last_frame_render.elapsed() >= self.frame_interval
+    }
+
+    fn flush_buffered_tokens(&mut self) -> Result<()> {
+        if self.pending_tokens.is_empty() {
+            return Ok(());
+        }
+
+        let tokens = std::mem::take(&mut self.pending_tokens);
+        self.write_chunk(&tokens)?;
+        self.last_frame_render = Instant::now();
+        Ok(())
+    }
+
+    fn on_frame_tick(&mut self) -> Result<()> {
+        if self.should_flush_frame() {
+            self.flush_buffered_tokens()?;
+        }
+        Ok(())
+    }
+
+    fn on_cursor_tick(&mut self) -> Result<()> {
+        if !self.cursor_visible || !self.cursor_enabled {
+            return Ok(());
+        }
+        if self.last_cursor_toggle.elapsed() >= CURSOR_BLINK_INTERVAL {
+            self.cursor_blink_phase = !self.cursor_blink_phase;
+            self.last_cursor_toggle = Instant::now();
+        }
+        self.render_cursor()
+    }
+
     fn write_chunk(&mut self, chunk: &str) -> Result<()> {
+        self.clear_inline_cursor()?;
         for ch in chunk.chars() {
             if ch == '\r' {
                 continue;
@@ -95,17 +201,27 @@ impl StreamPrinter {
             self.current_line.push(ch);
             self.streamed_any_delta = true;
         }
+
+        if self.cursor_visible && self.cursor_enabled {
+            self.render_cursor()?;
+        }
         io::stdout().flush()?;
         Ok(())
     }
 
     fn end_turn(&mut self) -> Result<()> {
+        self.flush_buffered_tokens()?;
+        self.cursor_visible = false;
+        self.turn_active = false;
+        self.clear_inline_cursor()?;
+
         if !self.current_line.is_empty() {
             self.finish_current_line()?;
         }
 
         self.set_style(LineStyle::Normal);
         self.current_line.clear();
+        self.pending_tokens.clear();
         io::stdout().flush()?;
         Ok(())
     }
@@ -120,6 +236,7 @@ impl StreamPrinter {
     }
 
     fn print_prompt(&mut self) -> Result<()> {
+        self.clear_inline_cursor()?;
         self.set_style(LineStyle::Normal);
         if self.colors_enabled {
             print!("\x1b[2m> \x1b[0m");
@@ -131,31 +248,45 @@ impl StreamPrinter {
     }
 
     fn print_error(&mut self, message: &str) -> Result<()> {
+        self.flush_buffered_tokens()?;
+        self.clear_inline_cursor()?;
         self.set_style(LineStyle::Normal);
         if self.colors_enabled {
-            println!("\x1b[31merror: {message}\x1b[0m");
+            println!("\x1b[31m* Error: {message}\x1b[0m");
         } else {
-            println!("error: {message}");
+            println!("* Error: {message}");
         }
-        println!();
         io::stdout().flush()?;
         Ok(())
     }
 
     fn ensure_newline(&mut self) -> Result<()> {
+        self.flush_buffered_tokens()?;
+        self.clear_inline_cursor()?;
         self.set_style(LineStyle::Normal);
         if !self.current_line.is_empty() {
-            println!();
-            self.current_line.clear();
+            self.finish_current_line()?;
         }
         io::stdout().flush()?;
         Ok(())
     }
 
-    fn print_tool_approval_prompt(&mut self, name: &str, input_preview: &str) -> Result<()> {
+    fn print_activity_header(&mut self, style: LineStyle, header: &str) -> Result<()> {
         self.ensure_newline()?;
-        self.set_style(LineStyle::Tool);
-        println!("{ACTIVITY_MARKER} Tool Execution: {name}");
+        if self.activity_blob_count > 0 {
+            println!();
+            println!();
+        }
+        self.set_style(style);
+        println!("{header}");
+        self.activity_blob_count += 1;
+        io::stdout().flush()?;
+        Ok(())
+    }
+
+    fn print_tool_approval_prompt(&mut self, name: &str, input_preview: &str) -> Result<()> {
+        let title = format!("* Tool Execution: {name}");
+        self.print_activity_header(LineStyle::Tool, title.as_str())?;
 
         for (idx, line) in input_preview.lines().enumerate() {
             let prefix = if idx == 0 {
@@ -174,8 +305,7 @@ impl StreamPrinter {
             println!("{prefix}{line}");
         }
 
-        self.set_style(LineStyle::Event);
-        println!("* Prompt");
+        self.print_activity_header(LineStyle::Event, "* Prompt")?;
         println!("  │ 1 accept and continue");
         println!("  │ 2 accept and continue (session)");
         println!("  └ 3 cancel and start new task");
@@ -191,12 +321,322 @@ impl StreamPrinter {
     }
 
     fn print_session_auto_approve_notice(&mut self) -> Result<()> {
-        self.ensure_newline()?;
-        self.set_style(LineStyle::Event);
-        println!("* Prompt");
+        self.print_activity_header(LineStyle::Event, "* Prompt")?;
         println!("  └ session auto-approve enabled");
         self.set_style(LineStyle::Normal);
         io::stdout().flush()?;
+        Ok(())
+    }
+
+    fn on_block_start(&mut self, index: usize, block: StreamBlock) -> Result<()> {
+        if !self.structured_blocks_enabled {
+            return Ok(());
+        }
+
+        let is_update = matches!(
+            (self.active_blocks.get(index), &block),
+            (
+                Some(StreamBlock::ToolCall { id: previous_id, .. }),
+                StreamBlock::ToolCall { id: next_id, .. },
+            ) if previous_id == next_id
+        );
+        if index == 0 && !is_update && !self.active_blocks.is_empty() {
+            self.active_blocks.clear();
+        }
+        while self.active_blocks.len() < index {
+            self.active_blocks.push(StreamBlock::Thinking {
+                content: String::new(),
+                collapsed: true,
+            });
+        }
+        if index < self.active_blocks.len() {
+            self.active_blocks[index] = block.clone();
+        } else {
+            self.active_blocks.push(block.clone());
+        }
+
+        self.render_structured_block(&block, is_update)
+    }
+
+    fn on_block_delta(&mut self, index: usize, delta: &str) -> Result<()> {
+        if !self.structured_blocks_enabled {
+            return Ok(());
+        }
+
+        let mut should_buffer = false;
+        if let Some(block) = self.active_blocks.get_mut(index) {
+            match block {
+                StreamBlock::Thinking { content, .. } => {
+                    content.push_str(delta);
+                    should_buffer = true;
+                }
+                StreamBlock::FinalText { content } => {
+                    content.push_str(delta);
+                    should_buffer = true;
+                }
+                StreamBlock::ToolCall { .. } | StreamBlock::ToolResult { .. } => {}
+            }
+            if should_buffer {
+                return self.buffer_token(delta);
+            }
+            return Ok(());
+        }
+
+        self.buffer_token(delta)
+    }
+
+    fn on_block_complete(&mut self, _index: usize) {}
+
+    fn render_structured_block(&mut self, block: &StreamBlock, is_update: bool) -> Result<()> {
+        match block {
+            StreamBlock::Thinking { .. } => {
+                if is_update {
+                    return Ok(());
+                }
+                self.print_activity_header(LineStyle::Thinking, "* Thinking")?;
+                self.active_block = BlockKind::Thinking;
+                self.thinking_rendered_lines = 0;
+            }
+            StreamBlock::ToolCall {
+                name,
+                input,
+                status,
+                ..
+            } => {
+                if !is_update {
+                    let title = format!("* Tool Execution: {name}");
+                    self.print_activity_header(LineStyle::Tool, title.as_str())?;
+                } else {
+                    self.ensure_newline()?;
+                }
+                self.render_tool_status(name, input, status)?;
+                self.active_block = BlockKind::Tool;
+            }
+            StreamBlock::ToolResult {
+                tool_call_id,
+                output,
+                is_error,
+            } => {
+                let tool_label = self.resolve_tool_label(tool_call_id);
+                if *is_error {
+                    self.ensure_newline()?;
+                    self.set_style(LineStyle::Delete);
+                    let first_line = output.lines().next().unwrap_or(output);
+                    println!("- [tool_error] {tool_label}: {first_line}");
+                } else if !self.render_code_tool_result(tool_call_id, output)? {
+                    self.ensure_newline()?;
+                    self.set_style(LineStyle::Add);
+                    println!("+ [tool_result] {tool_label}");
+                } else {
+                    self.set_style(LineStyle::Normal);
+                }
+                self.active_block = BlockKind::Normal;
+            }
+            StreamBlock::FinalText { content } => {
+                if !is_update {
+                    self.print_activity_header(LineStyle::Normal, "* Response")?;
+                    self.active_block = BlockKind::Response;
+                    self.thinking_rendered_lines = 0;
+                }
+                if !is_update && !content.is_empty() {
+                    self.buffer_token(content)?;
+                }
+            }
+        }
+
+        self.streamed_any_delta = true;
+        io::stdout().flush()?;
+        Ok(())
+    }
+
+    fn render_tool_status(
+        &mut self,
+        name: &str,
+        input: &serde_json::Value,
+        status: &ToolStatus,
+    ) -> Result<()> {
+        self.set_style(LineStyle::Event);
+        match status {
+            ToolStatus::Pending => {
+                println!("  └ Preparing...");
+            }
+            ToolStatus::WaitingApproval => {
+                let preview = structured_tool_input_preview(name, input);
+                for (idx, line) in preview.lines().enumerate() {
+                    let prefix = if idx == 0 {
+                        "  └ "
+                    } else if is_numbered_preview_line(line) {
+                        ""
+                    } else {
+                        "    "
+                    };
+                    let style = match line_style(line, false, self.colors_enabled) {
+                        LineStyle::Add => LineStyle::Add,
+                        LineStyle::Delete => LineStyle::Delete,
+                        _ => LineStyle::Event,
+                    };
+                    self.set_style(style);
+                    println!("{prefix}{line}");
+                }
+            }
+            ToolStatus::Executing => {
+                println!("  └ Running...");
+            }
+            ToolStatus::Complete => {
+                println!("  └ Done");
+            }
+            ToolStatus::Cancelled => {
+                println!("  └ Cancelled");
+            }
+        }
+        Ok(())
+    }
+
+    fn resolve_tool_label(&self, tool_call_id: &str) -> String {
+        self.active_blocks
+            .iter()
+            .find_map(|block| match block {
+                StreamBlock::ToolCall { id, name, .. } if id == tool_call_id => Some(name.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| tool_call_id.to_string())
+    }
+
+    fn resolve_tool_call(&self, tool_call_id: &str) -> Option<(&str, &serde_json::Value)> {
+        self.active_blocks.iter().find_map(|block| match block {
+            StreamBlock::ToolCall {
+                id, name, input, ..
+            } if id == tool_call_id => Some((name.as_str(), input)),
+            _ => None,
+        })
+    }
+
+    fn render_code_tool_result(&mut self, tool_call_id: &str, output: &str) -> Result<bool> {
+        let Some((tool_name, input)) = self.resolve_tool_call(tool_call_id) else {
+            return Ok(false);
+        };
+        let tool_name = tool_name.to_string();
+        let input = input.clone();
+
+        match tool_name.as_str() {
+            "edit_file" => {
+                let path = input
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("<missing>")
+                    .to_string();
+                let old_str = input.get("old_str").and_then(|v| v.as_str()).unwrap_or("");
+                let new_str = input.get("new_str").and_then(|v| v.as_str()).unwrap_or("");
+
+                let header = format!("* edited {path}");
+                self.print_activity_header(LineStyle::Tool, &header)?;
+                self.render_blob_metadata("old_str", old_str)?;
+                self.render_blob_numbered_lines(old_str, Some('-'))?;
+                self.render_blob_metadata("new_str", new_str)?;
+                self.render_blob_numbered_lines(new_str, Some('+'))?;
+                Ok(true)
+            }
+            "write_file" => {
+                let path = input
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("<missing>")
+                    .to_string();
+                let content = input.get("content").and_then(|v| v.as_str()).unwrap_or("");
+
+                let header = format!("* wrote {path}");
+                self.print_activity_header(LineStyle::Tool, &header)?;
+                self.render_blob_metadata("content", content)?;
+                self.render_blob_numbered_lines(content, Some('+'))?;
+                Ok(true)
+            }
+            "read_file" => {
+                let path = input
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("<missing>")
+                    .to_string();
+                let header = format!("* read {path}");
+                self.print_activity_header(LineStyle::Tool, &header)?;
+                self.render_blob_metadata("content", output)?;
+                self.render_blob_numbered_lines(output, None)?;
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    fn render_blob_metadata(&mut self, label: &str, content: &str) -> Result<()> {
+        let line_count = content.lines().count().max(usize::from(!content.is_empty()));
+        self.set_style(LineStyle::Event);
+        println!(
+            "    {label}: {} chars, {} lines",
+            content.chars().count(),
+            line_count
+        );
+        io::stdout().flush()?;
+        Ok(())
+    }
+
+    fn render_blob_numbered_lines(&mut self, content: &str, diff_marker: Option<char>) -> Result<()> {
+        if content.is_empty() {
+            let line = match diff_marker {
+                Some(marker) => format!("    1 {marker} <empty>"),
+                None => "    1   <empty>".to_string(),
+            };
+            let style = if diff_marker.is_some() {
+                line_style(&line, false, self.colors_enabled)
+            } else {
+                LineStyle::Event
+            };
+            self.set_style(style);
+            println!("{line}");
+            io::stdout().flush()?;
+            return Ok(());
+        }
+
+        for (idx, source_line) in content.lines().enumerate() {
+            let line_number = idx + 1;
+            let line = match diff_marker {
+                Some(marker) => format!("    {line_number} {marker} {source_line}"),
+                None => format!("    {line_number}   {source_line}"),
+            };
+            let style = if diff_marker.is_some() {
+                line_style(&line, false, self.colors_enabled)
+            } else {
+                LineStyle::Event
+            };
+            self.set_style(style);
+            println!("{line}");
+        }
+        io::stdout().flush()?;
+        Ok(())
+    }
+
+    fn render_cursor(&mut self) -> Result<()> {
+        if !self.cursor_enabled || !self.cursor_visible {
+            return Ok(());
+        }
+        if self.current_line.is_empty() {
+            return Ok(());
+        }
+
+        if self.cursor_blink_phase && !self.cursor_drawn {
+            print!("|");
+            self.cursor_drawn = true;
+        } else if !self.cursor_blink_phase && self.cursor_drawn {
+            self.clear_inline_cursor()?;
+        }
+        io::stdout().flush()?;
+        Ok(())
+    }
+
+    fn clear_inline_cursor(&mut self) -> Result<()> {
+        if self.cursor_drawn {
+            print!("\x08 \x08");
+            self.cursor_drawn = false;
+            io::stdout().flush()?;
+        }
         Ok(())
     }
 
@@ -225,11 +665,7 @@ impl StreamPrinter {
             let mut out_lines = Vec::new();
             for segment in wrapped {
                 let blob_line_index = self.thinking_rendered_lines % THINKING_MAX_LINES;
-                let prefix = if is_checklist_like(segment.as_str()) {
-                    "    "
-                } else {
-                    thinking_prefix(blob_line_index)
-                };
+                let prefix = thinking_prefix(blob_line_index);
                 out_lines.push(format!("{prefix}{segment}"));
                 self.thinking_rendered_lines += 1;
             }
@@ -244,6 +680,7 @@ impl StreamPrinter {
         }
 
         let trimmed = line.trim_start();
+
         if trimmed.starts_with("* Event:") || trimmed.starts_with("* Tool:") {
             return Ok(false);
         }
@@ -253,7 +690,6 @@ impl StreamPrinter {
         if output.is_empty() {
             return Ok(false);
         }
-
         let style = line_style(&output, false, self.colors_enabled);
         self.set_style(style);
         print!("{output}");
@@ -270,13 +706,29 @@ impl StreamPrinter {
             print!("\x1b[0m");
         }
 
-        match style {
-            LineStyle::Add => print!("\x1b[1;32m"),
-            LineStyle::Delete => print!("\x1b[1;31m"),
-            LineStyle::Event => print!("\x1b[2m"),
-            LineStyle::Thinking => print!("\x1b[2;90m"),
-            LineStyle::Tool => print!("\x1b[33m"),
-            LineStyle::Normal => {}
+        if !self.progressive_effects_enabled {
+            match style {
+                LineStyle::Add => print!("\x1b[1;32m"),
+                LineStyle::Delete => print!("\x1b[1;31m"),
+                LineStyle::Event => print!("\x1b[2m"),
+                LineStyle::Thinking => print!("\x1b[2;90m"),
+                LineStyle::Tool => print!("\x1b[33m"),
+                LineStyle::Normal => {}
+            }
+            self.active_style = style;
+            return;
+        }
+
+        match (style, self.turn_active) {
+            (LineStyle::Thinking, true) => print!("\x1b[2;90m"),
+            (LineStyle::Thinking, false) => print!("\x1b[90m"),
+            (LineStyle::Tool, true) => print!("\x1b[1;33m"),
+            (LineStyle::Tool, false) => print!("\x1b[2;33m"),
+            (LineStyle::Normal, true) => print!("\x1b[2m"),
+            (LineStyle::Normal, false) => {}
+            (LineStyle::Add, _) => print!("\x1b[1;32m"),
+            (LineStyle::Delete, _) => print!("\x1b[1;31m"),
+            (LineStyle::Event, _) => print!("\x1b[2m"),
         }
         self.active_style = style;
     }
@@ -297,6 +749,9 @@ impl StreamPrinter {
         if trimmed.starts_with("* Thinking") {
             self.active_block = BlockKind::Thinking;
             self.thinking_rendered_lines = 0;
+        } else if trimmed.starts_with("* Response") {
+            self.active_block = BlockKind::Response;
+            self.thinking_rendered_lines = 0;
         } else if self.active_block == BlockKind::Thinking && thinking_inline_text(line).is_some() {
             // Keep tool-call markers folded inside the active thinking block.
         } else if trimmed.starts_with("* Tool") {
@@ -313,10 +768,16 @@ impl StreamPrinter {
             && !self.in_code_block
         {
             self.thinking_rendered_lines = 0;
+        } else if self.active_block == BlockKind::Response
+            && trimmed.is_empty()
+            && !self.in_code_block
+        {
+            self.thinking_rendered_lines = 0;
         }
     }
 
     fn finish_current_line(&mut self) -> Result<()> {
+        self.clear_inline_cursor()?;
         let line = std::mem::take(&mut self.current_line);
         let rendered = self.render_line(&line)?;
         if rendered {
@@ -359,6 +820,15 @@ impl App {
                             let ui_update = match delta {
                                 ConversationStreamUpdate::Delta(text) => {
                                     UiUpdate::StreamDelta(text)
+                                }
+                                ConversationStreamUpdate::BlockStart { index, block } => {
+                                    UiUpdate::StreamBlockStart { index, block }
+                                }
+                                ConversationStreamUpdate::BlockDelta { index, delta } => {
+                                    UiUpdate::StreamBlockDelta { index, delta }
+                                }
+                                ConversationStreamUpdate::BlockComplete { index } => {
+                                    UiUpdate::StreamBlockComplete { index }
                                 }
                                 ConversationStreamUpdate::ToolApprovalRequest(request) => {
                                     UiUpdate::ToolApprovalRequest(request)
@@ -417,68 +887,98 @@ impl App {
 
             self.stream_printer.begin_turn();
             let _ = self.message_tx.send(content);
+            let mut frame_ticker = tokio::time::interval(self.stream_printer.frame_interval());
+            let mut cursor_ticker = tokio::time::interval(CURSOR_BLINK_INTERVAL);
 
             loop {
-                match self.update_rx.recv().await {
-                    Some(UiUpdate::StreamDelta(text)) => {
-                        if self.suppress_until_turn_complete {
-                            continue;
-                        }
-                        self.stream_printer.write_chunk(&text)?;
+                tokio::select! {
+                    _ = frame_ticker.tick() => {
+                        self.stream_printer.on_frame_tick()?;
                     }
-                    Some(UiUpdate::ToolApprovalRequest(request)) => {
-                        if self.auto_approve_tools {
-                            let _ = request.response_tx.send(true);
-                            continue;
-                        }
+                    _ = cursor_ticker.tick() => {
+                        self.stream_printer.on_cursor_tick()?;
+                    }
+                    update = self.update_rx.recv() => {
+                        match update {
+                            Some(UiUpdate::StreamDelta(text)) => {
+                                if self.suppress_until_turn_complete {
+                                    continue;
+                                }
+                                self.stream_printer.buffer_token(&text)?;
+                            }
+                            Some(UiUpdate::StreamBlockStart { index, block }) => {
+                                if self.suppress_until_turn_complete {
+                                    continue;
+                                }
+                                self.stream_printer.on_block_start(index, block)?;
+                            }
+                            Some(UiUpdate::StreamBlockDelta { index, delta }) => {
+                                if self.suppress_until_turn_complete {
+                                    continue;
+                                }
+                                self.stream_printer.on_block_delta(index, &delta)?;
+                            }
+                            Some(UiUpdate::StreamBlockComplete { index }) => {
+                                if self.suppress_until_turn_complete {
+                                    continue;
+                                }
+                                self.stream_printer.on_block_complete(index);
+                            }
+                            Some(UiUpdate::ToolApprovalRequest(request)) => {
+                                if self.auto_approve_tools {
+                                    let _ = request.response_tx.send(true);
+                                    continue;
+                                }
 
-                        self.stream_printer.print_tool_approval_prompt(
-                            &request.tool_name,
-                            &request.input_preview,
-                        )?;
-                        let decision = read_tool_confirmation().await?;
-                        match decision {
-                            ToolPromptDecision::AcceptOnce => {
-                                let _ = request.response_tx.send(true);
+                                self.stream_printer.flush_buffered_tokens()?;
+                                self.stream_printer.print_tool_approval_prompt(
+                                    &request.tool_name,
+                                    &request.input_preview,
+                                )?;
+                                let decision = read_tool_confirmation().await?;
+                                match decision {
+                                    ToolPromptDecision::AcceptOnce => {
+                                        let _ = request.response_tx.send(true);
+                                    }
+                                    ToolPromptDecision::AcceptSession => {
+                                        self.auto_approve_tools = true;
+                                        self.stream_printer.print_session_auto_approve_notice()?;
+                                        let _ = request.response_tx.send(true);
+                                    }
+                                    ToolPromptDecision::CancelNewTask => {
+                                        self.suppress_until_turn_complete = true;
+                                        let _ = request.response_tx.send(false);
+                                    }
+                                }
+                                self.stream_printer.set_style(LineStyle::Normal);
                             }
-                            ToolPromptDecision::AcceptSession => {
-                                self.auto_approve_tools = true;
-                                self.stream_printer.print_session_auto_approve_notice()?;
-                                let _ = request.response_tx.send(true);
+                            Some(UiUpdate::TurnComplete(text)) => {
+                                if self.suppress_until_turn_complete {
+                                    self.suppress_until_turn_complete = false;
+                                    self.stream_printer.end_turn()?;
+                                    break;
+                                }
+                                if !self.stream_printer.has_streamed_delta() && !text.is_empty() {
+                                    self.stream_printer.buffer_token(&text)?;
+                                }
+                                self.stream_printer.end_turn()?;
+                                break;
                             }
-                            ToolPromptDecision::CancelNewTask => {
-                                self.suppress_until_turn_complete = true;
-                                let _ = request.response_tx.send(false);
+                            Some(UiUpdate::Error(err)) => {
+                                if self.suppress_until_turn_complete {
+                                    self.suppress_until_turn_complete = false;
+                                    self.stream_printer.end_turn()?;
+                                    break;
+                                }
+                                self.stream_printer.end_turn()?;
+                                self.stream_printer.print_error(&err)?;
+                                break;
+                            }
+                            None => {
+                                self.should_quit = true;
+                                break;
                             }
                         }
-                        self.stream_printer.set_style(LineStyle::Normal);
-                        println!();
-                    }
-                    Some(UiUpdate::TurnComplete(text)) => {
-                        if self.suppress_until_turn_complete {
-                            self.suppress_until_turn_complete = false;
-                            self.stream_printer.end_turn()?;
-                            break;
-                        }
-                        if !self.stream_printer.has_streamed_delta() && !text.is_empty() {
-                            self.stream_printer.write_chunk(&text)?;
-                        }
-                        self.stream_printer.end_turn()?;
-                        break;
-                    }
-                    Some(UiUpdate::Error(err)) => {
-                        if self.suppress_until_turn_complete {
-                            self.suppress_until_turn_complete = false;
-                            self.stream_printer.end_turn()?;
-                            break;
-                        }
-                        self.stream_printer.end_turn()?;
-                        self.stream_printer.print_error(&err)?;
-                        break;
-                    }
-                    None => {
-                        self.should_quit = true;
-                        break;
                     }
                 }
             }
@@ -502,6 +1002,51 @@ async fn read_user_line() -> Result<Option<String>> {
 }
 
 async fn read_tool_confirmation() -> Result<ToolPromptDecision> {
+    if io::stdin().is_terminal() {
+        return task::spawn_blocking(|| -> Result<ToolPromptDecision> {
+            enable_raw_mode()?;
+            let decision = (|| -> Result<ToolPromptDecision> {
+                loop {
+                    match event::read()? {
+                        Event::Key(event) if event.kind == KeyEventKind::Press => {
+                            match event.code {
+                                KeyCode::Char('1') => {
+                                    print!("1");
+                                    println!();
+                                    io::stdout().flush()?;
+                                    return Ok(ToolPromptDecision::AcceptOnce);
+                                }
+                                KeyCode::Char('2') => {
+                                    print!("2");
+                                    println!();
+                                    io::stdout().flush()?;
+                                    return Ok(ToolPromptDecision::AcceptSession);
+                                }
+                                KeyCode::Char('3') => {
+                                    print!("3");
+                                    println!();
+                                    io::stdout().flush()?;
+                                    return Ok(ToolPromptDecision::CancelNewTask);
+                                }
+                                KeyCode::Esc => {
+                                    print!("esc");
+                                    println!();
+                                    io::stdout().flush()?;
+                                    return Ok(ToolPromptDecision::CancelNewTask);
+                                }
+                                _ => {}
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            })();
+            let _ = disable_raw_mode();
+            decision
+        })
+        .await?;
+    }
+
     loop {
         let Some(raw) = read_user_line().await? else {
             return Ok(ToolPromptDecision::CancelNewTask);
@@ -519,8 +1064,6 @@ async fn read_tool_confirmation() -> Result<ToolPromptDecision> {
         if trimmed.starts_with('3') {
             return Ok(ToolPromptDecision::CancelNewTask);
         }
-        println!("* Prompt");
-        println!("  └ enter 1, 2, 3, or esc");
         print!("* Select > ");
         io::stdout().flush()?;
     }
@@ -651,6 +1194,135 @@ fn parse_bool_flag(value: String) -> Option<bool> {
     }
 }
 
+fn disable_cursor() -> bool {
+    std::env::var("AISTAR_DISABLE_CURSOR")
+        .ok()
+        .and_then(parse_bool_flag)
+        .unwrap_or(false)
+}
+
+fn disable_frame_batching() -> bool {
+    std::env::var("AISTAR_DISABLE_FRAME_BATCHING")
+        .ok()
+        .and_then(parse_bool_flag)
+        .unwrap_or(false)
+}
+
+fn disable_progressive_effects() -> bool {
+    std::env::var("AISTAR_DISABLE_PROGRESSIVE_EFFECTS")
+        .ok()
+        .and_then(parse_bool_flag)
+        .unwrap_or(false)
+}
+
+fn use_structured_blocks() -> bool {
+    std::env::var("AISTAR_USE_STRUCTURED_BLOCKS")
+        .ok()
+        .and_then(parse_bool_flag)
+        .unwrap_or(true)
+}
+
+fn resolve_frame_interval() -> Duration {
+    let ms = std::env::var("AISTAR_FRAME_INTERVAL_MS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .map(|v| v.clamp(4, 250))
+        .unwrap_or(DEFAULT_FRAME_INTERVAL.as_millis() as u64);
+    Duration::from_millis(ms)
+}
+
+fn structured_tool_input_preview(name: &str, input: &serde_json::Value) -> String {
+    match name {
+        "edit_file" => structured_preview_edit_file_input(input),
+        "write_file" => structured_preview_write_file_input(input),
+        "read_file" => structured_preview_read_file_input(input),
+        "rename_file" => structured_preview_rename_file_input(input),
+        _ => serde_json::to_string_pretty(input).unwrap_or_else(|_| input.to_string()),
+    }
+}
+
+fn structured_preview_edit_file_input(input: &serde_json::Value) -> String {
+    let path = input
+        .get("path")
+        .and_then(|v| v.as_str())
+        .unwrap_or("<missing>");
+    let old_str = input.get("old_str").and_then(|v| v.as_str()).unwrap_or("");
+    let new_str = input.get("new_str").and_then(|v| v.as_str()).unwrap_or("");
+
+    let mut out = String::new();
+    out.push_str(&format!("path: {path}\n"));
+    out.push_str(&format!(
+        "old_str: {} chars, {} lines\n",
+        old_str.chars().count(),
+        old_str.lines().count().max(usize::from(!old_str.is_empty()))
+    ));
+    out.push_str(&structured_preview_lines(old_str, Some('-')));
+    out.push_str(&format!(
+        "new_str: {} chars, {} lines\n",
+        new_str.chars().count(),
+        new_str.lines().count().max(usize::from(!new_str.is_empty()))
+    ));
+    out.push_str(&structured_preview_lines(new_str, Some('+')));
+    out
+}
+
+fn structured_preview_write_file_input(input: &serde_json::Value) -> String {
+    let path = input
+        .get("path")
+        .and_then(|v| v.as_str())
+        .unwrap_or("<missing>");
+    let content = input.get("content").and_then(|v| v.as_str()).unwrap_or("");
+
+    let mut out = String::new();
+    out.push_str(&format!("path: {path}\n"));
+    out.push_str(&format!(
+        "content: {} chars, {} lines\n",
+        content.chars().count(),
+        content.lines().count().max(usize::from(!content.is_empty()))
+    ));
+    out.push_str(&structured_preview_lines(content, Some('+')));
+    out
+}
+
+fn structured_preview_read_file_input(input: &serde_json::Value) -> String {
+    let path = input
+        .get("path")
+        .and_then(|v| v.as_str())
+        .unwrap_or("<missing>");
+    format!("path: {path}")
+}
+
+fn structured_preview_rename_file_input(input: &serde_json::Value) -> String {
+    let old_path = input
+        .get("old_path")
+        .and_then(|v| v.as_str())
+        .unwrap_or("<missing>");
+    let new_path = input
+        .get("new_path")
+        .and_then(|v| v.as_str())
+        .unwrap_or("<missing>");
+    format!("old_path: {old_path}\nnew_path: {new_path}")
+}
+
+fn structured_preview_lines(text: &str, diff_marker: Option<char>) -> String {
+    if text.is_empty() {
+        return match diff_marker {
+            Some(marker) => format!("    1 {marker} <empty>\n"),
+            None => "    1   <empty>\n".to_string(),
+        };
+    }
+
+    let mut out = String::new();
+    for (idx, line) in text.lines().enumerate() {
+        let line_number = idx + 1;
+        match diff_marker {
+            Some(marker) => out.push_str(&format!("    {line_number} {marker} {line}\n")),
+            None => out.push_str(&format!("    {line_number}   {line}\n")),
+        }
+    }
+    out
+}
+
 fn looks_like_activity_line(line: &str) -> bool {
     let trimmed = line.trim_start();
     trimmed.starts_with("* Thinking")
@@ -726,6 +1398,7 @@ fn is_numbered_preview_line(line: &str) -> bool {
     line.starts_with("  ...")
 }
 
+#[cfg(test)]
 fn is_checklist_like(line: &str) -> bool {
     let trimmed = line.trim_start();
     if trimmed.starts_with("- ") || trimmed.starts_with("• ") || trimmed.starts_with("* ") {
@@ -740,11 +1413,19 @@ fn is_checklist_like(line: &str) -> bool {
 }
 
 fn resolve_thinking_wrap_width() -> usize {
-    std::env::var("AISTAR_THINKING_WRAP_WIDTH")
+    if let Some(explicit) = std::env::var("AISTAR_THINKING_WRAP_WIDTH")
         .ok()
         .and_then(|v| v.trim().parse::<usize>().ok())
-        .map(|v| v.clamp(40, 160))
-        .unwrap_or(DEFAULT_THINKING_WRAP_WIDTH)
+    {
+        return explicit.clamp(40, 300);
+    }
+
+    if let Ok((cols, _)) = terminal_size() {
+        let usable = cols.saturating_sub(6) as usize;
+        return usable.clamp(40, 300);
+    }
+
+    DEFAULT_THINKING_WRAP_WIDTH
 }
 
 #[cfg(test)]
@@ -879,6 +1560,30 @@ mod tests {
     }
 
     #[test]
+    fn test_structured_tool_input_preview_edit_file_has_numbered_diff_lines() {
+        let input = serde_json::json!({
+            "path": "cal.rs",
+            "old_str": "fn a() {}\nfn b() {}",
+            "new_str": "fn a() {\n    1\n}\nfn b() {}"
+        });
+
+        let preview = structured_tool_input_preview("edit_file", &input);
+        assert!(preview.contains("path: cal.rs"));
+        assert!(preview.contains("old_str:"));
+        assert!(preview.contains("new_str:"));
+        assert!(preview.contains("    1 - fn a() {}"));
+        assert!(preview.contains("    2 - fn b() {}"));
+        assert!(preview.contains("    1 + fn a() {"));
+        assert!(preview.contains("    4 + fn b() {}"));
+    }
+
+    #[test]
+    fn test_structured_preview_lines_empty_content() {
+        assert_eq!(structured_preview_lines("", Some('+')), "    1 + <empty>\n");
+        assert_eq!(structured_preview_lines("", None), "    1   <empty>\n");
+    }
+
+    #[test]
     fn test_thinking_inline_text() {
         assert_eq!(
             thinking_inline_text("* Tool: read_file").as_deref(),
@@ -901,5 +1606,100 @@ mod tests {
         assert!(is_checklist_like("1. task"));
         assert!(is_checklist_like("• task"));
         assert!(!is_checklist_like("plain sentence"));
+    }
+
+    #[test]
+    fn test_frame_batching_buffers_and_flushes_tokens() {
+        let mut printer = StreamPrinter::new();
+        printer.frame_batching_enabled = true;
+        printer.cursor_enabled = false;
+
+        printer.buffer_token("Hello").unwrap();
+        printer.buffer_token(" World").unwrap();
+        assert_eq!(printer.pending_tokens, "Hello World");
+
+        printer.flush_buffered_tokens().unwrap();
+        assert!(printer.pending_tokens.is_empty());
+    }
+
+    #[test]
+    fn test_cursor_blink_phase_toggles_on_tick() {
+        let mut printer = StreamPrinter::new();
+        printer.cursor_enabled = true;
+        printer.cursor_visible = true;
+        printer.current_line = "streaming".to_string();
+        printer.last_cursor_toggle = Instant::now() - CURSOR_BLINK_INTERVAL;
+
+        let before = printer.cursor_blink_phase;
+        printer.on_cursor_tick().unwrap();
+        assert_ne!(printer.cursor_blink_phase, before);
+    }
+
+    #[test]
+    fn test_block_start_reuse_new_tool_call_id_resets_round_blocks() {
+        let mut printer = StreamPrinter::new();
+        printer.structured_blocks_enabled = true;
+        printer.active_blocks = vec![
+            StreamBlock::ToolCall {
+                id: "tool-old".to_string(),
+                name: "read_file".to_string(),
+                input: serde_json::json!({}),
+                status: ToolStatus::WaitingApproval,
+            },
+            StreamBlock::Thinking {
+                content: "stale".to_string(),
+                collapsed: false,
+            },
+        ];
+
+        printer
+            .on_block_start(
+                0,
+                StreamBlock::ToolCall {
+                    id: "tool-new".to_string(),
+                    name: "read_file".to_string(),
+                    input: serde_json::json!({}),
+                    status: ToolStatus::Pending,
+                },
+            )
+            .unwrap();
+
+        assert_eq!(printer.active_blocks.len(), 1);
+        match &printer.active_blocks[0] {
+            StreamBlock::ToolCall { id, .. } => assert_eq!(id, "tool-new"),
+            _ => panic!("expected tool call"),
+        }
+    }
+
+    #[test]
+    fn test_block_start_reuse_same_tool_call_id_keeps_existing_slots() {
+        let mut printer = StreamPrinter::new();
+        printer.structured_blocks_enabled = true;
+        printer.active_blocks = vec![
+            StreamBlock::ToolCall {
+                id: "tool-1".to_string(),
+                name: "read_file".to_string(),
+                input: serde_json::json!({}),
+                status: ToolStatus::WaitingApproval,
+            },
+            StreamBlock::Thinking {
+                content: "keep".to_string(),
+                collapsed: false,
+            },
+        ];
+
+        printer
+            .on_block_start(
+                0,
+                StreamBlock::ToolCall {
+                    id: "tool-1".to_string(),
+                    name: "read_file".to_string(),
+                    input: serde_json::json!({}),
+                    status: ToolStatus::Executing,
+                },
+            )
+            .unwrap();
+
+        assert_eq!(printer.active_blocks.len(), 2);
     }
 }

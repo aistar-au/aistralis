@@ -77,6 +77,10 @@ impl ApiClient {
         self.structured_tool_protocol
     }
 
+    pub fn is_local_endpoint(&self) -> bool {
+        is_local_endpoint(&self.api_url)
+    }
+
     #[cfg(test)]
     pub fn with_structured_tool_protocol(mut self, enabled: bool) -> Self {
         self.structured_tool_protocol = enabled;
@@ -93,11 +97,12 @@ impl ApiClient {
 
         let system_prompt = "You are a coding assistant. Use tools for all filesystem facts and changes. Never claim a file was read/written/renamed/searched unless the corresponding tool call succeeded. Use list_files/search_files/read_file before saying a file is missing or present.";
         let request_url = self.request_url();
+        let max_tokens = resolve_max_tokens(&self.api_url);
         let payload = match self.api_protocol {
             ApiProtocol::AnthropicMessages => {
                 let mut payload = json!({
                     "model": self.model,
-                    "max_tokens": 4096,
+                    "max_tokens": max_tokens,
                     "stream": true,
                     "system": system_prompt,
                     "messages": messages,
@@ -114,7 +119,7 @@ impl ApiClient {
             ApiProtocol::OpenAiChatCompletions => {
                 let mut payload = json!({
                     "model": self.model,
-                    "max_tokens": 4096,
+                    "max_tokens": max_tokens,
                     "stream": true,
                     "messages": openai_messages(messages, system_prompt),
                 });
@@ -185,6 +190,31 @@ fn parse_bool(value: String) -> Option<bool> {
         "0" | "false" | "no" | "off" => Some(false),
         _ => None,
     }
+}
+
+fn resolve_max_tokens(api_url: &str) -> u32 {
+    if let Some(value) = std::env::var("AISTAR_MAX_TOKENS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u32>().ok())
+    {
+        return value.clamp(128, 8192);
+    }
+
+    if is_local_endpoint(api_url) {
+        1024
+    } else {
+        4096
+    }
+}
+
+fn is_local_endpoint(url: &str) -> bool {
+    let normalized = url.to_ascii_lowercase();
+    normalized.starts_with("http://localhost")
+        || normalized.starts_with("https://localhost")
+        || normalized.starts_with("http://127.0.0.1")
+        || normalized.starts_with("https://127.0.0.1")
+        || normalized.starts_with("http://0.0.0.0")
+        || normalized.starts_with("https://0.0.0.0")
 }
 
 fn parse_protocol(value: String) -> Option<ApiProtocol> {
@@ -372,7 +402,7 @@ fn tool_definitions() -> serde_json::Value {
         },
         {
             "name": "edit_file",
-            "description": "Edit file content by exact string replacement",
+            "description": "Edit existing file by replacing one exact, unique snippet (old_str -> new_str). Do not send entire-file replacements via this tool.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -537,5 +567,11 @@ mod tests {
     fn test_openai_url_adapter_from_v1_base_endpoint() {
         let adapted = adapt_to_openai_chat_completions_url("http://localhost:8000/v1");
         assert_eq!(adapted, "http://localhost:8000/v1/chat/completions");
+    }
+
+    #[test]
+    fn test_resolve_max_tokens_defaults_for_local() {
+        let tokens = resolve_max_tokens("http://localhost:8000/v1/messages");
+        assert_eq!(tokens, 1024);
     }
 }

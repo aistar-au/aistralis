@@ -3,13 +3,22 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
+const MAX_EDIT_SNIPPET_CHARS: usize = 2_000;
+const MAX_EDIT_SNIPPET_LINES: usize = 80;
+
 pub struct ToolExecutor {
     working_dir: PathBuf,
+    canonical_working_dir: PathBuf,
 }
 
 impl ToolExecutor {
     pub fn new(working_dir: PathBuf) -> Self {
-        Self { working_dir }
+        let canonical_working_dir =
+            fs::canonicalize(&working_dir).unwrap_or_else(|_| working_dir.clone());
+        Self {
+            working_dir,
+            canonical_working_dir,
+        }
     }
 
     fn resolve_path(&self, path: &str) -> Result<PathBuf> {
@@ -26,11 +35,37 @@ impl ToolExecutor {
 
         let requested = self.working_dir.join(relative_path);
         let normalized = self.normalize_path(&requested);
-        if !normalized.starts_with(&self.working_dir) {
-            bail!("Security error: path escapes working directory");
-        }
+        self.ensure_path_is_within_workspace(&normalized)?;
 
         Ok(normalized)
+    }
+
+    fn ensure_path_is_within_workspace(&self, path: &Path) -> Result<()> {
+        let guard_path = if path.exists() {
+            path.to_path_buf()
+        } else {
+            self.nearest_existing_ancestor(path)
+                .context("Security error: could not find an existing parent path")?
+                .to_path_buf()
+        };
+
+        let canonical_guard = fs::canonicalize(&guard_path)
+            .with_context(|| format!("Failed to canonicalize {}", guard_path.display()))?;
+        if !canonical_guard.starts_with(&self.canonical_working_dir) {
+            bail!(
+                "Security error: path escapes working directory via symlink or traversal: {}",
+                path.display()
+            );
+        }
+        Ok(())
+    }
+
+    fn nearest_existing_ancestor<'a>(&self, path: &'a Path) -> Option<&'a Path> {
+        let mut current = path;
+        while !current.exists() {
+            current = current.parent()?;
+        }
+        Some(current)
     }
 
     fn normalize_path(&self, path: &Path) -> PathBuf {
@@ -68,6 +103,26 @@ impl ToolExecutor {
         let resolved = self.resolve_path(path)?;
         let content = fs::read_to_string(&resolved)?;
 
+        if old_str.trim().is_empty() {
+            bail!("edit_file requires a non-empty old_str");
+        }
+        if old_str.chars().count() > MAX_EDIT_SNIPPET_CHARS
+            || new_str.chars().count() > MAX_EDIT_SNIPPET_CHARS
+            || old_str.lines().count() > MAX_EDIT_SNIPPET_LINES
+            || new_str.lines().count() > MAX_EDIT_SNIPPET_LINES
+        {
+            bail!(
+                "edit_file requires focused snippets; old_str/new_str are too large (max {} chars or {} lines each)",
+                MAX_EDIT_SNIPPET_CHARS,
+                MAX_EDIT_SNIPPET_LINES
+            );
+        }
+        if old_str == content {
+            bail!(
+                "edit_file refuses full-file replacement; provide a focused old_str snippet instead"
+            );
+        }
+
         let occurrences = content.matches(old_str).count();
         if occurrences == 0 {
             bail!("String '{}' not found in file", old_str);
@@ -80,7 +135,7 @@ impl ToolExecutor {
             );
         }
 
-        let new_content = content.replace(old_str, new_str);
+        let new_content = content.replacen(old_str, new_str, 1);
         fs::write(resolved, new_content).context("Failed to edit file")
     }
 
@@ -426,5 +481,14 @@ mod tests {
         // This should return an Err, not a path to your root/etc
         let result = executor.resolve_path("../../etc/passwd");
         assert!(result.is_err(), "Security breach: Path traversal allowed!");
+    }
+
+    #[test]
+    fn test_list_files_path_traversal_blocked() {
+        let temp = TempDir::new().expect("temp dir");
+        let executor = ToolExecutor::new(temp.path().to_path_buf());
+
+        let result = executor.list_files(Some("../"), 10);
+        assert!(result.is_err(), "Path traversal should be rejected");
     }
 }

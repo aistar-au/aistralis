@@ -1,3 +1,4 @@
+use super::stream_block::{StreamBlock, ToolStatus};
 use crate::api::{stream::StreamParser, ApiClient};
 use crate::tools::ToolExecutor;
 use crate::types::{ApiMessage, Content, ContentBlock, StreamEvent};
@@ -12,6 +13,9 @@ use tokio::sync::{mpsc, oneshot};
 
 pub enum ConversationStreamUpdate {
     Delta(String),
+    BlockStart { index: usize, block: StreamBlock },
+    BlockDelta { index: usize, delta: String },
+    BlockComplete { index: usize },
     ToolApprovalRequest(ToolApprovalRequest),
 }
 
@@ -39,6 +43,7 @@ pub struct ConversationManager {
     client: ApiClient,
     tool_executor: ToolExecutor,
     api_messages: Vec<ApiMessage>,
+    current_turn_blocks: Vec<StreamBlock>,
     #[cfg(test)]
     mock_tool_executor_responses: Option<Arc<Mutex<HashMap<String, String>>>>,
 }
@@ -49,6 +54,7 @@ impl ConversationManager {
             client,
             tool_executor: executor,
             api_messages: Vec::new(),
+            current_turn_blocks: Vec::new(),
             #[cfg(test)]
             mock_tool_executor_responses: None,
         }
@@ -60,6 +66,7 @@ impl ConversationManager {
             client,
             tool_executor: ToolExecutor::new(std::path::PathBuf::from("/tmp")), // Dummy executor
             api_messages: Vec::new(),
+            current_turn_blocks: Vec::new(),
             mock_tool_executor_responses: Some(Arc::new(Mutex::new(tool_executor_responses))),
         }
     }
@@ -69,18 +76,21 @@ impl ConversationManager {
         content: String,
         stream_delta_tx: Option<&mpsc::UnboundedSender<ConversationStreamUpdate>>,
     ) -> Result<String> {
+        self.current_turn_blocks.clear();
         self.api_messages.push(ApiMessage {
             role: "user".to_string(),
             content: Content::Text(content),
         });
 
         let use_structured_tool_protocol = self.client.supports_structured_tool_protocol();
+        let use_structured_blocks = structured_blocks_enabled();
         let limits = resolve_history_limits(self.client.is_local_endpoint());
         let stream_server_events = stream_server_events_enabled();
         let stream_local_tool_events = stream_local_tool_events_enabled();
         let require_tool_approval = tool_approval_enabled();
         let mut rounds = 0usize;
         loop {
+            self.current_turn_blocks.clear();
             self.prune_message_history(limits.max_api_messages);
             rounds += 1;
             if rounds > 24 {
@@ -101,31 +111,54 @@ impl ConversationManager {
                 for event in events {
                     match event {
                         StreamEvent::MessageStart { .. } => {
-                            if stream_server_events {
-                                if let Some(tx) = stream_delta_tx {
-                                    let _ = tx.send(ConversationStreamUpdate::Delta(
-                                        "\n* Event: message_start\n".to_string(),
-                                    ));
-                                }
+                            if !use_structured_blocks && stream_server_events {
+                                emit_text_update(
+                                    stream_delta_tx,
+                                    "\n* Event: message_start\n".to_string(),
+                                );
                             }
                         }
                         StreamEvent::ContentBlockStart {
                             index,
                             content_block,
                         } => {
-                            if stream_server_events {
-                                if let Some(tx) = stream_delta_tx {
-                                    let event_label = match &content_block {
-                                        ContentBlock::Text { .. } => "\n* Thinking\n".to_string(),
-                                        ContentBlock::ToolUse { name, .. } => {
-                                            format!("\n* Tool: {name}\n")
-                                        }
-                                        ContentBlock::ToolResult { .. } => {
-                                            format!("\n* Event: tool_result_block#{index}\n")
-                                        }
-                                    };
-                                    let _ = tx.send(ConversationStreamUpdate::Delta(event_label));
+                            if use_structured_blocks {
+                                match &content_block {
+                                    ContentBlock::Text { .. } => {
+                                        self.upsert_turn_block(
+                                            index,
+                                            StreamBlock::Thinking {
+                                                content: String::new(),
+                                                collapsed: false,
+                                            },
+                                            stream_delta_tx,
+                                        );
+                                    }
+                                    ContentBlock::ToolUse { id, name, input } => {
+                                        self.upsert_turn_block(
+                                            index,
+                                            StreamBlock::ToolCall {
+                                                id: id.clone(),
+                                                name: name.clone(),
+                                                input: input.clone(),
+                                                status: ToolStatus::Pending,
+                                            },
+                                            stream_delta_tx,
+                                        );
+                                    }
+                                    ContentBlock::ToolResult { .. } => {}
                                 }
+                            } else if stream_server_events {
+                                let event_label = match &content_block {
+                                    ContentBlock::Text { .. } => "\n* Thinking\n".to_string(),
+                                    ContentBlock::ToolUse { name, .. } => {
+                                        format!("\n* Tool: {name}\n")
+                                    }
+                                    ContentBlock::ToolResult { .. } => {
+                                        format!("\n* Event: tool_result_block#{index}\n")
+                                    }
+                                };
+                                emit_text_update(stream_delta_tx, event_label);
                             }
 
                             let tool_name =
@@ -146,9 +179,13 @@ impl ConversationManager {
                         }
                         StreamEvent::ContentBlockDelta { index, delta } => {
                             if let Some(text) = delta.text {
-                                assistant_text.push_str(&text);
-                                if let Some(tx) = stream_delta_tx {
-                                    let _ = tx.send(ConversationStreamUpdate::Delta(text));
+                                if use_structured_blocks {
+                                    let appended =
+                                        self.append_text_delta(index, &text, stream_delta_tx);
+                                    assistant_text.push_str(&appended);
+                                } else {
+                                    assistant_text.push_str(&text);
+                                    emit_text_update(stream_delta_tx, text);
                                 }
                             }
 
@@ -156,18 +193,36 @@ impl ConversationManager {
                                 let maybe_buffer = tool_input_buffers.get_mut(index);
                                 if let Some(Some(buffer)) = maybe_buffer {
                                     buffer.push_str(&partial_json);
+
+                                    if use_structured_blocks {
+                                        if let Ok(parsed_input) =
+                                            serde_json::from_str::<serde_json::Value>(buffer)
+                                        {
+                                            if let Some(StreamBlock::ToolCall { input, .. }) =
+                                                self.current_turn_blocks.get_mut(index)
+                                            {
+                                                *input = parsed_input;
+                                            }
+                                        }
+                                        emit_stream_update(
+                                            stream_delta_tx,
+                                            ConversationStreamUpdate::BlockDelta {
+                                                index,
+                                                delta: partial_json.clone(),
+                                            },
+                                        );
+                                    }
                                 }
-                                if stream_server_events {
+                                if !use_structured_blocks && stream_server_events {
                                     let should_emit = tool_input_event_emitted
                                         .get(index)
                                         .map(|emitted| !*emitted)
                                         .unwrap_or(false);
                                     if should_emit {
-                                        if let Some(tx) = stream_delta_tx {
-                                            let _ = tx.send(ConversationStreamUpdate::Delta(
-                                                format!("\n* Event: input_json#{index}\n"),
-                                            ));
-                                        }
+                                        emit_text_update(
+                                            stream_delta_tx,
+                                            format!("\n* Event: input_json#{index}\n"),
+                                        );
                                         if let Some(flag) = tool_input_event_emitted.get_mut(index)
                                         {
                                             *flag = true;
@@ -188,37 +243,48 @@ impl ConversationManager {
                                 if !json_str.is_empty() {
                                     if let Ok(parsed_input) = serde_json::from_str(json_str) {
                                         *input = parsed_input;
+
+                                        if let Some(StreamBlock::ToolCall {
+                                            input: block_input,
+                                            ..
+                                        }) = self.current_turn_blocks.get_mut(index)
+                                        {
+                                            *block_input = input.clone();
+                                        }
                                     }
                                 }
                             }
+                            if use_structured_blocks {
+                                emit_stream_update(
+                                    stream_delta_tx,
+                                    ConversationStreamUpdate::BlockComplete { index },
+                                );
+                            }
                         }
                         StreamEvent::MessageDelta { delta } => {
-                            if stream_server_events {
-                                if let Some(tx) = stream_delta_tx {
-                                    let stop_reason =
-                                        delta.stop_reason.unwrap_or_else(|| "none".to_string());
-                                    let _ = tx.send(ConversationStreamUpdate::Delta(format!(
-                                        "\n* Event: stop_reason={stop_reason}\n"
-                                    )));
-                                }
+                            if !use_structured_blocks && stream_server_events {
+                                let stop_reason =
+                                    delta.stop_reason.unwrap_or_else(|| "none".to_string());
+                                emit_text_update(
+                                    stream_delta_tx,
+                                    format!("\n* Event: stop_reason={stop_reason}\n"),
+                                );
                             }
                         }
                         StreamEvent::MessageStop => {
-                            if stream_server_events {
-                                if let Some(tx) = stream_delta_tx {
-                                    let _ = tx.send(ConversationStreamUpdate::Delta(
-                                        "\n* Event: message_stop\n".to_string(),
-                                    ));
-                                }
+                            if !use_structured_blocks && stream_server_events {
+                                emit_text_update(
+                                    stream_delta_tx,
+                                    "\n* Event: message_stop\n".to_string(),
+                                );
                             }
                         }
                         StreamEvent::Unknown => {
-                            if stream_server_events {
-                                if let Some(tx) = stream_delta_tx {
-                                    let _ = tx.send(ConversationStreamUpdate::Delta(
-                                        "\n* Event: unknown\n".to_string(),
-                                    ));
-                                }
+                            if !use_structured_blocks && stream_server_events {
+                                emit_text_update(
+                                    stream_delta_tx,
+                                    "\n* Event: unknown\n".to_string(),
+                                );
                             }
                         }
                     }
@@ -277,6 +343,9 @@ impl ConversationManager {
             }
 
             if tool_use_blocks.is_empty() {
+                if use_structured_blocks {
+                    self.promote_thinking_blocks_to_final_text();
+                }
                 return Ok(assistant_text);
             }
 
@@ -284,6 +353,13 @@ impl ConversationManager {
             let mut text_protocol_tool_results = Vec::new();
             for block in tool_use_blocks {
                 if let ContentBlock::ToolUse { id, name, input } = block {
+                    if use_structured_blocks && require_tool_approval {
+                        self.set_tool_call_status(
+                            &id,
+                            ToolStatus::WaitingApproval,
+                            stream_delta_tx,
+                        );
+                    }
                     let approved = if require_tool_approval {
                         self.request_tool_approval(&name, &input, stream_delta_tx)
                             .await
@@ -291,24 +367,51 @@ impl ConversationManager {
                         true
                     };
 
+                    if use_structured_blocks {
+                        if approved {
+                            self.set_tool_call_status(&id, ToolStatus::Executing, stream_delta_tx);
+                        } else {
+                            self.set_tool_call_status(&id, ToolStatus::Cancelled, stream_delta_tx);
+                        }
+                    }
+
                     let result = if approved {
                         self.execute_tool(&name, &input).await
                     } else {
                         Err(anyhow::anyhow!("Tool execution cancelled by user"))
                     };
-                    if stream_local_tool_events {
-                        if let Some(tx) = stream_delta_tx {
-                            match &result {
-                                Ok(_) => {
-                                    let _ = tx.send(ConversationStreamUpdate::Delta(format!(
-                                        "\n+ [tool_result] {name}\n"
-                                    )));
-                                }
-                                Err(error) => {
-                                    let _ = tx.send(ConversationStreamUpdate::Delta(format!(
-                                        "\n- [tool_error] {name}: {error}\n"
-                                    )));
-                                }
+                    if use_structured_blocks {
+                        let final_status = if approved {
+                            ToolStatus::Complete
+                        } else {
+                            ToolStatus::Cancelled
+                        };
+                        self.set_tool_call_status(&id, final_status, stream_delta_tx);
+
+                        let output_for_stream = result
+                            .as_ref()
+                            .map_or_else(|e| e.to_string(), ToString::to_string);
+                        self.push_tool_result_block(
+                            StreamBlock::ToolResult {
+                                tool_call_id: id.clone(),
+                                output: output_for_stream,
+                                is_error: result.is_err(),
+                            },
+                            stream_delta_tx,
+                        );
+                    } else if stream_local_tool_events {
+                        match &result {
+                            Ok(_) => {
+                                emit_text_update(
+                                    stream_delta_tx,
+                                    format!("\n+ [tool_result] {name}\n"),
+                                );
+                            }
+                            Err(error) => {
+                                emit_text_update(
+                                    stream_delta_tx,
+                                    format!("\n- [tool_error] {name}: {error}\n"),
+                                );
                             }
                         }
                     }
@@ -447,6 +550,128 @@ impl ConversationManager {
         }
     }
 
+    fn upsert_turn_block(
+        &mut self,
+        index: usize,
+        block: StreamBlock,
+        stream_delta_tx: Option<&mpsc::UnboundedSender<ConversationStreamUpdate>>,
+    ) {
+        while self.current_turn_blocks.len() < index {
+            self.current_turn_blocks.push(StreamBlock::Thinking {
+                content: String::new(),
+                collapsed: true,
+            });
+        }
+
+        if index < self.current_turn_blocks.len() {
+            self.current_turn_blocks[index] = block.clone();
+        } else {
+            self.current_turn_blocks.push(block.clone());
+        }
+
+        emit_stream_update(
+            stream_delta_tx,
+            ConversationStreamUpdate::BlockStart { index, block },
+        );
+    }
+
+    fn append_text_delta(
+        &mut self,
+        index: usize,
+        text: &str,
+        stream_delta_tx: Option<&mpsc::UnboundedSender<ConversationStreamUpdate>>,
+    ) -> String {
+        let mut appended = String::new();
+
+        if let Some(StreamBlock::Thinking { content, .. }) = self.current_turn_blocks.get_mut(index)
+        {
+            appended = append_incremental_suffix(content, text);
+        } else if index >= self.current_turn_blocks.len() {
+            appended = text.to_string();
+            self.upsert_turn_block(
+                index,
+                StreamBlock::Thinking {
+                    content: text.to_string(),
+                    collapsed: false,
+                },
+                stream_delta_tx,
+            );
+        }
+
+        if !appended.is_empty() {
+            emit_stream_update(
+                stream_delta_tx,
+                ConversationStreamUpdate::BlockDelta {
+                    index,
+                    delta: appended.clone(),
+                },
+            );
+        }
+
+        appended
+    }
+
+    fn set_tool_call_status(
+        &mut self,
+        tool_call_id: &str,
+        status: ToolStatus,
+        stream_delta_tx: Option<&mpsc::UnboundedSender<ConversationStreamUpdate>>,
+    ) {
+        if let Some((index, block)) =
+            self.current_turn_blocks
+                .iter_mut()
+                .enumerate()
+                .find(|(_, block)| {
+                    matches!(
+                        block,
+                        StreamBlock::ToolCall { id, .. } if id == tool_call_id
+                    )
+                })
+        {
+            if let StreamBlock::ToolCall {
+                status: current, ..
+            } = block
+            {
+                *current = status;
+            }
+
+            emit_stream_update(
+                stream_delta_tx,
+                ConversationStreamUpdate::BlockStart {
+                    index,
+                    block: block.clone(),
+                },
+            );
+        }
+    }
+
+    fn push_tool_result_block(
+        &mut self,
+        block: StreamBlock,
+        stream_delta_tx: Option<&mpsc::UnboundedSender<ConversationStreamUpdate>>,
+    ) {
+        let index = self.current_turn_blocks.len();
+        self.current_turn_blocks.push(block.clone());
+        emit_stream_update(
+            stream_delta_tx,
+            ConversationStreamUpdate::BlockStart { index, block },
+        );
+        emit_stream_update(
+            stream_delta_tx,
+            ConversationStreamUpdate::BlockComplete { index },
+        );
+    }
+
+    fn promote_thinking_blocks_to_final_text(&mut self) {
+        for block in &mut self.current_turn_blocks {
+            if let StreamBlock::Thinking { content, .. } = block {
+                *block = StreamBlock::FinalText {
+                    content: content.clone(),
+                };
+            }
+        }
+    }
+
     fn prune_message_history(&mut self, max_api_messages: usize) {
         if self.api_messages.len() <= max_api_messages {
             return;
@@ -454,6 +679,64 @@ impl ConversationManager {
         let to_drop = self.api_messages.len() - max_api_messages;
         self.api_messages.drain(0..to_drop);
     }
+}
+
+fn emit_stream_update(
+    stream_delta_tx: Option<&mpsc::UnboundedSender<ConversationStreamUpdate>>,
+    update: ConversationStreamUpdate,
+) {
+    if let Some(tx) = stream_delta_tx {
+        let _ = tx.send(update);
+    }
+}
+
+fn emit_text_update(
+    stream_delta_tx: Option<&mpsc::UnboundedSender<ConversationStreamUpdate>>,
+    text: String,
+) {
+    emit_stream_update(stream_delta_tx, ConversationStreamUpdate::Delta(text));
+}
+
+fn structured_blocks_enabled() -> bool {
+    std::env::var("AISTAR_USE_STRUCTURED_BLOCKS")
+        .ok()
+        .and_then(parse_bool_flag)
+        .unwrap_or(true)
+}
+
+fn append_incremental_suffix(existing: &mut String, incoming: &str) -> String {
+    if incoming.is_empty() {
+        return String::new();
+    }
+    if existing.is_empty() {
+        existing.push_str(incoming);
+        return incoming.to_string();
+    }
+    if existing == incoming {
+        return String::new();
+    }
+    if incoming.starts_with(existing.as_str()) {
+        let suffix = incoming[existing.len()..].to_string();
+        existing.clear();
+        existing.push_str(incoming);
+        return suffix;
+    }
+    if existing.starts_with(incoming) || existing.ends_with(incoming) {
+        return String::new();
+    }
+
+    let max_overlap = existing.len().min(incoming.len());
+    let mut overlap = 0usize;
+    for idx in 1..=max_overlap {
+        if existing.ends_with(&incoming[..idx]) {
+            overlap = idx;
+        }
+    }
+    let suffix = incoming[overlap..].to_string();
+    if !suffix.is_empty() {
+        existing.push_str(&suffix);
+    }
+    suffix
 }
 
 fn resolve_history_limits(is_local_endpoint: bool) -> HistoryLimits {
@@ -501,36 +784,32 @@ fn env_override_usize(key: &str, default: usize, min: usize, max: usize) -> usiz
         .unwrap_or(default)
 }
 
+fn parse_bool_flag(value: String) -> Option<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
 fn stream_local_tool_events_enabled() -> bool {
     std::env::var("AISTAR_STREAM_LOCAL_TOOL_EVENTS")
         .ok()
-        .and_then(|v| match v.trim().to_ascii_lowercase().as_str() {
-            "1" | "true" | "yes" | "on" => Some(true),
-            "0" | "false" | "no" | "off" => Some(false),
-            _ => None,
-        })
+        .and_then(parse_bool_flag)
         .unwrap_or(false)
 }
 
 fn tool_approval_enabled() -> bool {
     std::env::var("AISTAR_TOOL_CONFIRM")
         .ok()
-        .and_then(|v| match v.trim().to_ascii_lowercase().as_str() {
-            "1" | "true" | "yes" | "on" => Some(true),
-            "0" | "false" | "no" | "off" => Some(false),
-            _ => None,
-        })
+        .and_then(parse_bool_flag)
         .unwrap_or(true)
 }
 
 fn stream_server_events_enabled() -> bool {
     std::env::var("AISTAR_STREAM_SERVER_EVENTS")
         .ok()
-        .and_then(|v| match v.trim().to_ascii_lowercase().as_str() {
-            "1" | "true" | "yes" | "on" => Some(true),
-            "0" | "false" | "no" | "off" => Some(false),
-            _ => None,
-        })
+        .and_then(parse_bool_flag)
         .unwrap_or(true)
 }
 
@@ -538,11 +817,7 @@ fn tool_input_preview(tool_name: &str, input: &serde_json::Value) -> String {
     match tool_name {
         "edit_file" => preview_edit_file_input(input),
         "write_file" => preview_write_file_input(input),
-        _ => {
-            let rendered =
-                serde_json::to_string_pretty(input).unwrap_or_else(|_| input.to_string());
-            truncate_for_history(&rendered, 1200)
-        }
+        _ => serde_json::to_string_pretty(input).unwrap_or_else(|_| input.to_string()),
     }
 }
 
@@ -564,7 +839,7 @@ fn preview_edit_file_input(input: &serde_json::Value) -> String {
             .count()
             .max(usize::from(!old_str.is_empty()))
     ));
-    out.push_str(&preview_lines('-', old_str, 8, 1));
+    out.push_str(&preview_lines('-', old_str, usize::MAX, 1));
     out.push_str(&format!(
         "new_str: {} chars, {} lines\n",
         new_str.chars().count(),
@@ -573,8 +848,8 @@ fn preview_edit_file_input(input: &serde_json::Value) -> String {
             .count()
             .max(usize::from(!new_str.is_empty()))
     ));
-    out.push_str(&preview_lines('+', new_str, 8, 1));
-    truncate_for_history(&out, 1400)
+    out.push_str(&preview_lines('+', new_str, usize::MAX, 1));
+    out
 }
 
 fn preview_write_file_input(input: &serde_json::Value) -> String {
@@ -594,8 +869,8 @@ fn preview_write_file_input(input: &serde_json::Value) -> String {
             .count()
             .max(usize::from(!content.is_empty()))
     ));
-    out.push_str(&preview_lines('+', content, 10, 1));
-    truncate_for_history(&out, 1400)
+    out.push_str(&preview_lines('+', content, usize::MAX, 1));
+    out
 }
 
 fn preview_lines(prefix: char, text: &str, max_lines: usize, start_line: usize) -> String {
@@ -1171,5 +1446,20 @@ data: {"type":"message_stop"}"#.to_string(),
         assert_eq!(written, "fn main() {}\n");
 
         Ok(())
+    }
+
+    #[test]
+    fn test_append_incremental_suffix_snapshot_streaming() {
+        let mut content = String::new();
+        let a = append_incremental_suffix(&mut content, "Hello");
+        let b = append_incremental_suffix(&mut content, "Hello world");
+        let c = append_incremental_suffix(&mut content, "Hello world");
+        let d = append_incremental_suffix(&mut content, "Hello world!");
+
+        assert_eq!(a, "Hello");
+        assert_eq!(b, " world");
+        assert_eq!(c, "");
+        assert_eq!(d, "!");
+        assert_eq!(content, "Hello world!");
     }
 }
