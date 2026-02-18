@@ -40,7 +40,7 @@ As the Lead Architect, your role is to manage the "State Machine" of the reposit
 | **Drafting** | Write the `.md` task and the failing Rust test. | Establish "Red" state. |
 | **Dispatch** | Feed the task to the agent (Aider/Gemini). | Trigger "Green" attempt. |
 | **Verification** | Run `cargo test --all` and review the diff. | Ensure no regressions. |
-| **Promotion** | Move task to `TASKS/COMPLETED/` and merge. | Update repository history. |
+| **Promotion** | Move task to `TASKS/completed/` and merge. | Update repository history. |
 
 ---
 
@@ -58,6 +58,12 @@ When delegating to an agent, always use the following template to maintain the T
 > 3. Modify the code to make the test pass. 
 > 4. Verify with `cargo test`."
 
+## Change Confirmation Rule
+
+- Agents must request explicit confirmation before adding or documenting new runtime flags, new operational modes, or new naming-convention policies.
+- This rule applies to both implementation and documentation updates.
+- Standard bug fixes that do not add flags/modes/policy changes do not require extra confirmation.
+
 ---
 
 ## Task Naming Convention
@@ -65,21 +71,29 @@ When delegating to an agent, always use the following template to maintain the T
 | Prefix | Type | Example |
 |--------|------|---------|
 | `CRIT-XX` | Critical bugs | `CRIT-01-protocol.md` |
+| `CORE-XX` | Core runtime behavior | `CORE-01-sse-parser.md` |
 | `FEAT-XX` | Feature requests | `FEAT-01-streaming-ui.md` |
 | `REF-XX` | Refactoring tasks | `REF-01-error-handling.md` |
-| `DOC-XX` | Documentation tasks | `DOC-01-api-docs.md` |
+| `SEC-XX` | Security hardening | `SEC-01-path-security.md` |
+| `DOC-XX` | Documentation tasks | `DOC-01-change-safety-policy.md` |
 
 ---
 
-## Current Tasks
+## Task Snapshot (February 18, 2026)
 
-| ID | Target File | Status | Description |
-|----|-------------|--------|-------------|
-| CRIT-01 | `src/state/conversation.rs` | Pending | Anthropic protocol mock test |
-| CRIT-02 | `src/types/api.rs` | Fixed | Serde flatten removed |
-| CRIT-03 | `src/app/mod.rs` | Verified | State sync test passes |
-## 🔒 Security Design: Lexical vs Canonical
-In **SEC-01**, we strictly forbid `std::fs::canonicalize()`. 
-- **Why:** Canonicalization requires the file to exist on the disk. 
-- **The Conflict:** If the AI agent attempts to use the `write_file` tool to create a *new* file, canonicalization will throw an error, preventing the tool from working.
-- **The Solution:** We use **Lexical Normalization**. This resolves `..` and `.` components in memory without touching the disk, allowing for secure path validation even for files that haven't been created yet.
+Current archived manifests in `TASKS/completed/`:
+- `CORE-01-sse-parser.md`
+- `CORE-05-ui-event-display-contract.md`
+- `CORE-06-transcript-determinism-regression-gates.md`
+- `CRIT-01-protocol.md`
+- `CRIT-02-serde-fix.md`
+- `CRIT-03-state-sync.md`
+- `SEC-01-path-security.md`
+
+If new work is opened, create manifests in `TASKS/` root first, then promote to `TASKS/completed/` after verification.
+
+## 🔒 Security Design: Lexical + Canonical Guard
+In **SEC-01**, we avoid using `std::fs::canonicalize()` on non-existent target paths, but we do use canonicalization for guard checks on existing paths.
+- **Why lexical first:** New file targets may not exist yet; lexical normalization handles `.`/`..` without requiring disk existence.
+- **Why canonical guard second:** Existing ancestor paths are canonicalized to block symlink-escape and traversal bypasses.
+- **Resulting model:** Resolve and validate candidate paths lexically, then canonicalize an existing guard path to enforce workspace containment.

@@ -6,12 +6,14 @@ use tempfile::TempDir;
 
 #[test]
 fn test_path_traversal_blocked() {
+    // Integration scope: end-to-end public tool APIs reject traversal attempts.
     let temp = TempDir::new().expect("temp dir");
     let executor = ToolExecutor::new(temp.path().to_path_buf());
 
     assert!(executor.read_file("../../etc/passwd").is_err());
     assert!(executor.read_file("/etc/passwd").is_err());
     assert!(executor.read_file("..\\windows\\system32").is_err());
+    assert!(executor.list_files(Some("../"), 10).is_err());
 }
 
 #[test]
@@ -103,6 +105,7 @@ fn test_edit_file_rejects_oversized_snippets() {
 #[cfg(unix)]
 #[test]
 fn test_symlink_escape_is_blocked_for_file_tools() {
+    // Integration scope: file-oriented tool calls must reject symlink escapes.
     use std::os::unix::fs::symlink;
 
     let workspace = TempDir::new().expect("workspace");
@@ -167,6 +170,28 @@ fn test_list_and_search_files() {
         .search_files("radical", Some("."), 20)
         .expect("search files should succeed");
     assert!(searched.contains("src/cal.rs:1"));
+}
+
+#[test]
+fn test_search_files_treats_query_as_literal_not_regex() {
+    let temp = TempDir::new().expect("temp dir");
+    let executor = ToolExecutor::new(temp.path().to_path_buf());
+
+    executor
+        .write_file(
+            "notes.txt",
+            "fn print_dimmed_prompt_with_padding(&mut self) -> Result<()>\n",
+        )
+        .expect("write notes");
+
+    let searched = executor
+        .search_files(
+            "fn print_dimmed_prompt_with_padding(&mut self) -> Result<()>",
+            Some("."),
+            20,
+        )
+        .expect("literal search should succeed");
+    assert!(searched.contains("notes.txt:1"));
 }
 
 #[test]

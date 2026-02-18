@@ -1,4 +1,5 @@
 use crate::config::Config;
+use crate::runtime::{is_local_endpoint_url, parse_bool_flag};
 use crate::types::{ApiMessage, Content, ContentBlock};
 use anyhow::Result;
 use bytes::Bytes;
@@ -43,7 +44,7 @@ impl ApiClient {
             .unwrap_or_else(|| infer_api_protocol(&config.api_url));
         let structured_tool_protocol = std::env::var("AISTAR_STRUCTURED_TOOL_PROTOCOL")
             .ok()
-            .and_then(parse_bool)
+            .and_then(parse_bool_flag)
             .unwrap_or(true);
 
         Ok(Self {
@@ -78,7 +79,7 @@ impl ApiClient {
     }
 
     pub fn is_local_endpoint(&self) -> bool {
-        is_local_endpoint(&self.api_url)
+        is_local_endpoint_url(&self.api_url)
     }
 
     #[cfg(test)]
@@ -95,7 +96,7 @@ impl ApiClient {
             }
         }
 
-        let system_prompt = "You are a coding assistant. Use tools for all filesystem facts and changes. Never claim a file was read/written/renamed/searched unless the corresponding tool call succeeded. Use list_files/search_files/read_file before saying a file is missing or present.";
+        let system_prompt = "You are a coding assistant. Use tools for all filesystem facts and changes. Never claim a file was read/written/renamed/searched unless the corresponding tool call succeeded. Prefer search_files for targeted string matches and avoid full-file reads unless required. Use list_files/search_files/read_file before saying a file is missing or present. For edit_file, use a focused old_str snippet around the target change and avoid whole-file replacements; if an entire file rewrite is needed, use write_file instead. Always send non-empty string paths for file tools. Avoid redundant read/search loops: do not call the same tool repeatedly without new evidence.";
         let request_url = self.request_url();
         let max_tokens = resolve_max_tokens(&self.api_url);
         let payload = match self.api_protocol {
@@ -184,14 +185,6 @@ impl ApiClient {
     }
 }
 
-fn parse_bool(value: String) -> Option<bool> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "1" | "true" | "yes" | "on" => Some(true),
-        "0" | "false" | "no" | "off" => Some(false),
-        _ => None,
-    }
-}
-
 fn resolve_max_tokens(api_url: &str) -> u32 {
     if let Some(value) = std::env::var("AISTAR_MAX_TOKENS")
         .ok()
@@ -200,21 +193,11 @@ fn resolve_max_tokens(api_url: &str) -> u32 {
         return value.clamp(128, 8192);
     }
 
-    if is_local_endpoint(api_url) {
+    if is_local_endpoint_url(api_url) {
         1024
     } else {
         4096
     }
-}
-
-fn is_local_endpoint(url: &str) -> bool {
-    let normalized = url.to_ascii_lowercase();
-    normalized.starts_with("http://localhost")
-        || normalized.starts_with("https://localhost")
-        || normalized.starts_with("http://127.0.0.1")
-        || normalized.starts_with("https://127.0.0.1")
-        || normalized.starts_with("http://0.0.0.0")
-        || normalized.starts_with("https://0.0.0.0")
 }
 
 fn parse_protocol(value: String) -> Option<ApiProtocol> {
@@ -544,6 +527,7 @@ fn tool_definitions() -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
 
     #[test]
     fn test_protocol_inference_defaults_to_anthropic_messages() {
@@ -573,5 +557,61 @@ mod tests {
     fn test_resolve_max_tokens_defaults_for_local() {
         let tokens = resolve_max_tokens("http://localhost:8000/v1/messages");
         assert_eq!(tokens, 1024);
+    }
+
+    #[test]
+    fn test_tool_definitions_cover_execute_tool_dispatch_names() {
+        let expected: BTreeSet<&str> = BTreeSet::from([
+            "read_file",
+            "write_file",
+            "edit_file",
+            "rename_file",
+            "list_files",
+            "list_directory",
+            "search_files",
+            "search",
+            "git_status",
+            "git_diff",
+            "git_log",
+            "git_show",
+            "git_add",
+            "git_commit",
+        ]);
+
+        let names: BTreeSet<String> = tool_definitions()
+            .as_array()
+            .expect("tool definitions must be an array")
+            .iter()
+            .filter_map(|tool| tool.get("name").and_then(|value| value.as_str()))
+            .map(ToOwned::to_owned)
+            .collect();
+
+        let expected_owned: BTreeSet<String> = expected.iter().map(|s| s.to_string()).collect();
+        assert_eq!(names, expected_owned);
+    }
+
+    #[test]
+    fn test_openai_tool_definitions_match_base_tool_names() {
+        let base_names: BTreeSet<String> = tool_definitions()
+            .as_array()
+            .expect("tool definitions must be an array")
+            .iter()
+            .filter_map(|tool| tool.get("name").and_then(|value| value.as_str()))
+            .map(ToOwned::to_owned)
+            .collect();
+
+        let openai_names: BTreeSet<String> = tool_definitions_openai()
+            .as_array()
+            .expect("openai tool definitions must be an array")
+            .iter()
+            .filter_map(|tool| {
+                tool.get("function")
+                    .and_then(|function| function.get("name"))
+                    .and_then(|name| name.as_str())
+            })
+            .map(ToOwned::to_owned)
+            .collect();
+
+        assert_eq!(openai_names, base_names);
     }
 }

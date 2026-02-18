@@ -37,7 +37,6 @@ fn default_json_object() -> serde_json::Value {
     serde_json::Value::Object(serde_json::Map::new())
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum StreamEvent {
@@ -63,7 +62,6 @@ pub enum StreamEvent {
     Unknown,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 pub struct Delta {
     #[serde(rename = "type")]
@@ -75,7 +73,6 @@ pub struct Delta {
     pub partial_json: Option<String>,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 pub struct MessageStartData {
     pub id: String,
@@ -83,7 +80,6 @@ pub struct MessageStartData {
     pub model: String,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 pub struct MessageDelta {
     pub stop_reason: Option<String>,

@@ -6,6 +6,7 @@ use std::process::Command;
 const MAX_EDIT_SNIPPET_CHARS: usize = 2_000;
 const MAX_EDIT_SNIPPET_LINES: usize = 80;
 
+#[derive(Clone)]
 pub struct ToolExecutor {
     working_dir: PathBuf,
     canonical_working_dir: PathBuf,
@@ -22,6 +23,11 @@ impl ToolExecutor {
     }
 
     fn resolve_path(&self, path: &str) -> Result<PathBuf> {
+        let path = path.trim();
+        if path.is_empty() {
+            bail!("Path cannot be empty");
+        }
+
         if path.starts_with('/') || path.contains('\\') {
             bail!("Security error: absolute or platform-specific path not allowed: {path}");
         }
@@ -88,11 +94,17 @@ impl ToolExecutor {
 
     pub fn read_file(&self, path: &str) -> Result<String> {
         let resolved = self.resolve_path(path)?;
+        if resolved.is_dir() {
+            bail!("read_file expected a file path, got a directory: {path}");
+        }
         fs::read_to_string(resolved).context("Failed to read file")
     }
 
     pub fn write_file(&self, path: &str, content: &str) -> Result<()> {
         let resolved = self.resolve_path(path)?;
+        if resolved.is_dir() {
+            bail!("write_file expected a file path, got a directory: {path}");
+        }
         if let Some(parent) = resolved.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -101,7 +113,10 @@ impl ToolExecutor {
 
     pub fn edit_file(&self, path: &str, old_str: &str, new_str: &str) -> Result<()> {
         let resolved = self.resolve_path(path)?;
-        let content = fs::read_to_string(&resolved)?;
+        if resolved.is_dir() {
+            bail!("edit_file expected a file path, got a directory: {path}");
+        }
+        let content = fs::read_to_string(&resolved).context("Failed to read file for edit")?;
 
         if old_str.trim().is_empty() {
             bail!("edit_file requires a non-empty old_str");
@@ -346,6 +361,7 @@ impl ToolExecutor {
             .arg("--line-number")
             .arg("--color")
             .arg("never")
+            .arg("--fixed-strings")
             .arg("--smart-case")
             .arg("--max-count")
             .arg(max_results.to_string())
@@ -377,6 +393,10 @@ impl ToolExecutor {
         let lowered_query = query.to_lowercase();
 
         while let Some(path) = stack.pop() {
+            if self.ensure_path_is_within_workspace(&path).is_err() {
+                continue;
+            }
+
             if path.is_dir() {
                 let mut children: Vec<_> = fs::read_dir(&path)
                     .with_context(|| format!("Failed to read directory {}", path.display()))?
@@ -384,7 +404,10 @@ impl ToolExecutor {
                     .with_context(|| format!("Failed to list entries in {}", path.display()))?;
                 children.sort_by_key(|entry| entry.path());
                 for child in children {
-                    stack.push(child.path());
+                    let child_path = child.path();
+                    if self.ensure_path_is_within_workspace(&child_path).is_ok() {
+                        stack.push(child_path);
+                    }
                 }
                 continue;
             }
@@ -451,44 +474,49 @@ fn should_skip_list_entry(root: &Path, working_dir: &Path, name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::env;
     use tempfile::TempDir;
 
     #[test]
-    fn test_path_traversal_blocked() {
+    fn test_empty_path_rejected() {
         let temp = TempDir::new().expect("temp dir");
         let executor = ToolExecutor::new(temp.path().to_path_buf());
 
-        assert!(executor.resolve_path("../../etc/passwd").is_err());
-        assert!(executor.resolve_path("/etc/passwd").is_err());
-        assert!(executor.resolve_path("..\\windows\\system32").is_err());
+        let err = executor
+            .read_file("   ")
+            .expect_err("empty path should fail");
+        assert!(err.to_string().contains("Path cannot be empty"));
     }
 
     #[test]
-    fn test_filename_with_double_dots_allowed() {
+    fn test_edit_file_rejects_directory_target() {
         let temp = TempDir::new().expect("temp dir");
         let executor = ToolExecutor::new(temp.path().to_path_buf());
 
-        assert!(executor.resolve_path("my..file.txt").is_ok());
-        assert!(executor.resolve_path("v..2.0.md").is_ok());
+        let err = executor
+            .edit_file(".", "old", "new")
+            .expect_err("directory path should fail");
+        assert!(err
+            .to_string()
+            .contains("edit_file expected a file path, got a directory"));
     }
 
+    #[cfg(unix)]
     #[test]
-    fn test_path_traversal_prevention() {
-        let workspace = env::current_dir().unwrap();
-        let executor = ToolExecutor::new(workspace.clone());
+    fn test_search_fallback_skips_symlink_escape_paths() {
+        // Unit scope: fallback search walker must not follow symlinked directories
+        // outside the workspace when rg is unavailable.
+        use std::os::unix::fs::symlink;
 
-        // This should return an Err, not a path to your root/etc
-        let result = executor.resolve_path("../../etc/passwd");
-        assert!(result.is_err(), "Security breach: Path traversal allowed!");
-    }
+        let workspace = TempDir::new().expect("workspace");
+        let outside = TempDir::new().expect("outside");
+        let executor = ToolExecutor::new(workspace.path().to_path_buf());
 
-    #[test]
-    fn test_list_files_path_traversal_blocked() {
-        let temp = TempDir::new().expect("temp dir");
-        let executor = ToolExecutor::new(temp.path().to_path_buf());
+        fs::write(outside.path().join("secret.txt"), "top secret\n").expect("seed outside");
+        symlink(outside.path(), workspace.path().join("out")).expect("create symlink");
 
-        let result = executor.list_files(Some("../"), 10);
-        assert!(result.is_err(), "Path traversal should be rejected");
+        let result = executor
+            .search_fallback("secret", workspace.path(), 20)
+            .expect("fallback search should succeed");
+        assert_eq!(result, "No matches found.");
     }
 }

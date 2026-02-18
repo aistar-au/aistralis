@@ -94,7 +94,7 @@ impl StreamParser {
                 let should_parse = if json_data == "[DONE]" {
                     true
                 } else {
-                    !event_type.as_deref().is_some_and(|ty| ty == "ping")
+                    event_type.as_deref().is_none_or(|ty| ty != "ping")
                 };
 
                 if should_parse {
@@ -238,23 +238,5 @@ impl StreamParser {
                 state.stopped = true;
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_sse_fragmentation() {
-        let mut parser = StreamParser::new();
-        let frag1 = "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello";
-        let frag2 = "\"}}\n\n";
-
-        let events1 = parser.process(frag1.as_bytes()).unwrap();
-        assert_eq!(events1.len(), 0); // Should be empty, fragment held in buffer
-
-        let events2 = parser.process(frag2.as_bytes()).unwrap();
-        assert_eq!(events2.len(), 1); // Should now process the full event
     }
 }

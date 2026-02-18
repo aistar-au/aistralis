@@ -2,6 +2,8 @@ use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+use crate::runtime::is_local_endpoint_url;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub api_key: Option<String>,
@@ -67,11 +69,6 @@ impl Config {
     }
 
     fn is_local_endpoint(&self) -> bool {
-        self.api_url.starts_with("http://localhost")
-            || self.api_url.starts_with("https://localhost")
-            || self.api_url.starts_with("http://127.0.0.1")
-            || self.api_url.starts_with("https://127.0.0.1")
-            || self.api_url.starts_with("http://0.0.0.0")
-            || self.api_url.starts_with("https://0.0.0.0")
+        is_local_endpoint_url(&self.api_url)
     }
 }

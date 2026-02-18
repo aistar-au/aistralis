@@ -1,7 +1,8 @@
 use crossterm::{
-    event::{DisableMouseCapture, EnableMouseCapture},
+    cursor::Show,
+    event::{DisableBracketedPaste, EnableBracketedPaste},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io::{self, Stdout};
@@ -16,14 +17,14 @@ pub fn setup() -> anyhow::Result<TerminalType> {
     }));
 
     enable_raw_mode()?;
-    execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(io::stdout(), EnableBracketedPaste)?;
 
     let backend = CrosstermBackend::new(io::stdout());
     Ok(Terminal::new(backend)?)
 }
 
 pub fn restore() -> anyhow::Result<()> {
-    disable_raw_mode()?;
-    execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture)?;
+    let _ = disable_raw_mode();
+    let _ = execute!(io::stdout(), DisableBracketedPaste, Show);
     Ok(())
 }
