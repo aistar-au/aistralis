@@ -10,37 +10,71 @@
 
 ## Context
 
-ADR-006 locks the four contracts that decouple the TUI from the conversation loop:
+ADR-006 locks four contracts that decouple the TUI from the conversation loop:
 `RuntimeMode`, `RuntimeContext`, `RuntimeEvent`, `FrontendAdapter`, and the
 `Runtime<M>` loop struct. These must exist as compilable types before any
-implementation work begins.
+implementation begins.
 
-This task creates the stub module only. No logic, no wiring, no changes to
-`src/app/mod.rs`. The types are empty or contain `todo!()` bodies where needed.
+**QA finding addressed:** `src/runtime.rs` already exists as a flat file
+containing `parse_bool_flag`, `parse_bool_str`, and `is_local_endpoint_url`.
+`src/app/mod.rs` imports `use crate::runtime::parse_bool_flag`. These helpers
+must be preserved. The solution is a standard Rust module conversion:
+rename `src/runtime.rs` to `src/runtime/mod.rs`. Rust resolves `pub mod runtime`
+in `lib.rs` to either form identically — no changes to `lib.rs` or `app/mod.rs`
+are required.
+
+This task adds stubs only. No logic, no wiring, no changes to `src/app/mod.rs`.
 
 ---
 
 ## Target files
 
-- `src/runtime/mod.rs` — module declarations and re-exports
-- `src/runtime/mode.rs` — `RuntimeMode` trait
-- `src/runtime/context.rs` — `RuntimeContext<'a>`
-- `src/runtime/event.rs` — `RuntimeEvent` enum
-- `src/runtime/frontend.rs` — `FrontendAdapter` trait
-- `src/runtime/loop.rs` — `Runtime<M: RuntimeMode>` struct
-- `src/lib.rs` — add `pub mod runtime;`
+| Operation | File |
+| :--- | :--- |
+| **Rename** (move, do not delete content) | `src/runtime.rs` → `src/runtime/mod.rs` |
+| **Create** | `src/runtime/mode.rs` |
+| **Create** | `src/runtime/context.rs` |
+| **Create** | `src/runtime/event.rs` |
+| **Create** | `src/runtime/frontend.rs` |
+| **Create** | `src/runtime/loop.rs` |
 
-Do not touch `src/app/mod.rs` or any file outside `src/runtime/` and `src/lib.rs`.
+Do **not** touch `src/lib.rs`, `src/app/mod.rs`, or any file outside `src/runtime/`.
 
 ---
 
-## Exact types to define
+## Step 1 — Convert flat file to module directory
 
-Copy these signatures verbatim. Do not add fields or methods not listed here.
+```bash
+mkdir src/runtime
+mv src/runtime.rs src/runtime/mod.rs
+```
+
+After this `cargo check` must still pass. The existing helpers and their tests
+remain in `src/runtime/mod.rs` and stay importable as `crate::runtime::*`.
+Do not modify them.
+
+Then add module declarations at the very top of `src/runtime/mod.rs`,
+before the existing helper functions:
 
 ```rust
-// src/runtime/mode.rs
-use crate::state::conversation::ConversationManager;
+// NEW — add at top of src/runtime/mod.rs
+pub mod context;
+pub mod event;
+pub mod frontend;
+pub mod mode;
+pub mod r#loop;  // `loop` is a reserved keyword; raw identifier required
+
+// existing helpers follow unchanged
+pub fn parse_bool_flag(...) { ... }
+```
+
+---
+
+## Step 2 — Create stub files
+
+### `src/runtime/mode.rs`
+
+```rust
 use crate::types::UiUpdate;
 use super::context::RuntimeContext;
 
@@ -51,8 +85,9 @@ pub trait RuntimeMode {
 }
 ```
 
+### `src/runtime/context.rs`
+
 ```rust
-// src/runtime/context.rs
 use crate::state::conversation::ConversationManager;
 use crate::types::UiUpdate;
 use tokio::sync::mpsc;
@@ -63,16 +98,18 @@ pub struct RuntimeContext<'a> {
 
 impl<'a> RuntimeContext<'a> {
     pub fn start_turn(&mut self, _input: String, _tx: mpsc::UnboundedSender<UiUpdate>) {
-        todo!("wired in REF-04")
+        // wired in REF-04
     }
     pub fn cancel_turn(&mut self) {
-        todo!("wired in REF-04")
+        // wired in REF-04
     }
 }
 ```
 
+### `src/runtime/event.rs`
+
 ```rust
-// src/runtime/event.rs
+// Adjust import path if ToolApprovalRequest lives elsewhere in your crate.
 use crate::types::ToolApprovalRequest;
 
 pub enum RuntimeEvent {
@@ -84,8 +121,9 @@ pub enum RuntimeEvent {
 }
 ```
 
+### `src/runtime/frontend.rs`
+
 ```rust
-// src/runtime/frontend.rs
 use super::mode::RuntimeMode;
 
 pub trait FrontendAdapter {
@@ -95,8 +133,9 @@ pub trait FrontendAdapter {
 }
 ```
 
+### `src/runtime/loop.rs`
+
 ```rust
-// src/runtime/loop.rs
 use crate::types::UiUpdate;
 use tokio::sync::mpsc;
 use super::{context::RuntimeContext, frontend::FrontendAdapter, mode::RuntimeMode};
@@ -116,56 +155,72 @@ impl<M: RuntimeMode> Runtime<M> {
 
 ---
 
-## Anchor test
+## Step 3 — Add anchor test
 
-Add this test at the bottom of `src/runtime/mod.rs`:
+Append inside the **existing** `#[cfg(test)] mod tests` block in
+`src/runtime/mod.rs`. Do not create a second `mod tests`.
 
 ```rust
-#[cfg(test)]
-mod tests {
-    // Verify all runtime contract types compile and are importable.
-    use super::{
+#[test]
+fn test_ref_02_runtime_types_compile() {
+    use crate::runtime::{
         context::RuntimeContext,
         event::RuntimeEvent,
         frontend::FrontendAdapter,
         mode::RuntimeMode,
     };
-
-    #[test]
-    fn test_ref_02_runtime_types_compile() {
-        // Types exist and the module compiles. No logic to assert.
-        let _ = std::mem::size_of::<RuntimeEvent>();
-    }
+    // Zero-cost existence check — if the module tree compiles, this passes.
+    let _ = std::mem::size_of::<RuntimeEvent>();
 }
 ```
 
 ---
 
-## Verification after CI check
+## Verification matrix
+
+Run in order. Every item must be green before closing this task.
 
 ```bash
+# 1. Catches any import breaks from the module rename
 cargo check --all-targets
+
+# 2. Anchor test
 cargo test test_ref_02_runtime_types_compile -- --nocapture
-cargo test --all   # all prior tests must remain green
+
+# 3. Existing runtime helper tests must stay green
+cargo test test_parse_bool_helpers -- --nocapture
+cargo test test_is_local_endpoint_url_normalizes_case_and_space -- --nocapture
+
+# 4. Full regression suite
+cargo test --all
+
+# 5. No ratatui/crossterm in src/runtime/ (use grep if musl target unavailable)
+grep -r "ratatui\|crossterm" src/runtime/ && echo "FAIL: UI crates in runtime" || echo "clean"
 ```
 
-Also run:
+Also confirm with git that the only changed files are inside `src/runtime/`:
 
 ```bash
-cargo check --target x86_64-unknown-linux-musl -p aistar \
-  --manifest-path Cargo.toml 2>&1 | grep "src/runtime"
+git diff --name-only
+# Expected output — nothing outside src/runtime/:
+# src/runtime/mod.rs
+# src/runtime/mode.rs
+# src/runtime/context.rs
+# src/runtime/event.rs
+# src/runtime/frontend.rs
+# src/runtime/loop.rs
 ```
-
-This must produce no errors related to `ratatui` or `crossterm` — those crates
-must not appear in `src/runtime/` imports.
 
 ---
 
 ## Definition of done
 
-- [ ] `src/runtime/` module exists with all five files.
-- [ ] `pub mod runtime;` declared in `src/lib.rs`.
+- [ ] `src/runtime/` directory exists; `src/runtime.rs` is gone.
+- [ ] `src/runtime/mod.rs` contains the original helpers unchanged plus the five new `pub mod` declarations at the top.
+- [ ] `src/runtime/{mode,context,event,frontend,loop}.rs` created as stubs.
+- [ ] `cargo check --all-targets` passes — proves `use crate::runtime::parse_bool_flag` in `app/mod.rs` still resolves.
 - [ ] `test_ref_02_runtime_types_compile` passes.
+- [ ] `test_parse_bool_helpers` passes.
 - [ ] `cargo test --all` is green.
-- [ ] No `ratatui`/`crossterm` imports in `src/runtime/`.
-- [ ] `src/app/mod.rs` is unchanged (diff must be empty for that file).
+- [ ] No `ratatui` or `crossterm` in `src/runtime/`.
+- [ ] `git diff src/lib.rs src/app/mod.rs` shows no changes to those files.
