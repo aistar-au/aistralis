@@ -1,8 +1,8 @@
 pub mod context;
 pub mod event;
 pub mod frontend;
-pub mod mode;
 pub mod r#loop;
+pub mod mode;
 
 pub fn parse_bool_flag(value: String) -> Option<bool> {
     parse_bool_str(value.as_str())
@@ -39,13 +39,45 @@ mod tests {
         assert_eq!(parse_bool_str("maybe"), None);
     }
 
-
     #[test]
     fn test_ref_02_runtime_types_compile() {
-        use crate::runtime::event::RuntimeEvent;
+        use crate::runtime::{
+            context::RuntimeContext, event::RuntimeEvent, frontend::FrontendAdapter,
+            mode::RuntimeMode,
+        };
 
-        // Zero-cost existence check — if the module tree compiles, this passes.
+        fn _uses_runtime_mode_trait<T: RuntimeMode>() {}
+        fn _uses_frontend_adapter_trait<T: FrontendAdapter>() {}
+
+        struct DummyMode;
+        impl RuntimeMode for DummyMode {
+            fn on_user_input(&mut self, _input: String, _ctx: &mut RuntimeContext) {}
+            fn on_model_update(
+                &mut self,
+                _update: crate::app::UiUpdate,
+                _ctx: &mut RuntimeContext,
+            ) {
+            }
+            fn is_turn_in_progress(&self) -> bool {
+                false
+            }
+        }
+
+        struct DummyFrontend;
+        impl FrontendAdapter for DummyFrontend {
+            fn poll_user_input(&mut self) -> Option<String> {
+                None
+            }
+            fn render<M: RuntimeMode>(&mut self, _mode: &M) {}
+            fn should_quit(&self) -> bool {
+                true
+            }
+        }
+
         let _ = std::mem::size_of::<RuntimeEvent>();
+        let _ = std::mem::size_of::<Option<RuntimeContext<'static>>>();
+        let _ = _uses_runtime_mode_trait::<DummyMode>;
+        let _ = _uses_frontend_adapter_trait::<DummyFrontend>;
     }
 
     #[test]
