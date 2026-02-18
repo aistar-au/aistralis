@@ -1,12 +1,12 @@
 # TASK: REF-04 — Wire `RuntimeContext::start_turn` to API dispatch
 
-**Status:** Ready  
+**Status:** Blocked — pending TASKS/REF-04-pre-conversation-dispatch-surface.md  
 **Phase:** 5 (correctness)  
 **Track:** Runtime seam (REF track)  
 **Depends on:** REF-03 green (`test_ref_03_tui_mode_overlay_blocks_input` passing)  
 **Blocks:** REF-05  
 **ADR:** ADR-006 §2 (`RuntimeContext`), §6 (`Runtime<M>` loop)  
-**Scope:** `src/runtime/context.rs`, `src/runtime/mod.rs` (anchor regression fix), `src/app/mod.rs` (call sites only), `tests/ref_04_start_turn.rs` (new)
+**Scope:** `src/runtime/context.rs` (implementation + anchor unit tests), `src/runtime/mod.rs` (anchor regression fix), `src/app/mod.rs` (call sites only)
 
 ---
 
@@ -70,10 +70,9 @@ it is a **gap** — follow the gap procedure in §4 instead of guessing.
 
 | File | Change |
 | :--- | :--- |
-| `src/runtime/context.rs` | Replace borrowed stub with owned struct; implement `start_turn` and `cancel_turn` |
+| `src/runtime/context.rs` | Replace borrowed stub with owned struct; implement `start_turn` and `cancel_turn`; add/update REF-04 anchor unit tests |
 | `src/runtime/mod.rs` | Update REF-02 anchor compile check for non-generic `RuntimeContext` |
 | `src/app/mod.rs` | Update `dummy_ctx()` helper; remove old dispatch call sites |
-| `tests/ref_04_start_turn.rs` | New anchor test file |
 | `Cargo.toml` | Add `tokio-util` if not already present (see §2) |
 
 All other files are **out of scope**. If a compile error requires touching
@@ -130,9 +129,10 @@ The `todo!` stubs are temporary scaffolding; they are replaced in §3.
 Writing the struct first and confirming `cargo check` passes before
 proceeding avoids compound errors.
 
-`tests/ref_04_start_turn.rs` is an integration test (external crate context),
-so keep fields `pub(crate)` and use the public `RuntimeContext::new(...)`
-constructor for test construction.
+The REF-04 anchor test lives in a `#[cfg(test)]` module in
+`src/runtime/context.rs`. Keep fields `pub(crate)` and use the public
+`RuntimeContext::new(...)` constructor so test and production construction
+follow the same path.
 
 Also update the `dummy_ctx()` helper in `src/app/mod.rs` (inside the
 existing `#[cfg(test)]` block). The owned form requires a real
@@ -266,9 +266,10 @@ valid outcome — it surfaces a missing precondition, not a failure.
 ## §5 — Anchor test
 
 ```rust
-// tests/ref_04_start_turn.rs
+// src/runtime/context.rs (inside #[cfg(test)] mod tests)
+use super::RuntimeContext;
+use crate::runtime::UiUpdate;
 use tokio::sync::mpsc;
-use aistar::runtime::{context::RuntimeContext, UiUpdate};
 use tokio_util::sync::CancellationToken;
 
 #[tokio::test]
@@ -311,7 +312,7 @@ async fn test_ref_04_start_turn_dispatches_message() {
 ### Track A — no gaps found
 
 - [ ] `RuntimeContext` struct has no lifetime parameter; fields are `conversation: ConversationManager`, `update_tx`, `cancel`.
-- [ ] `RuntimeContext::new(conversation, update_tx, cancel)` exists and is used by the integration anchor test.
+- [ ] `RuntimeContext::new(conversation, update_tx, cancel)` exists and is used by the anchor unit test.
 - [ ] `start_turn` and `cancel_turn` fully implemented — no `todo!` or `// wired in REF-04` comments remain in `src/runtime/context.rs`.
 - [ ] `src/runtime/mod.rs` REF-02 anchor no longer references `RuntimeContext<'static>` and remains green with the owned shape.
 - [ ] `dummy_ctx()` in `src/app/mod.rs` constructs the owned form.
