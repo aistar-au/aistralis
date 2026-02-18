@@ -1,3 +1,9 @@
+pub mod context;
+pub mod event;
+pub mod frontend;
+pub mod mode;
+pub mod r#loop;
+
 pub fn parse_bool_flag(value: String) -> Option<bool> {
     parse_bool_str(value.as_str())
 }
@@ -31,6 +37,19 @@ mod tests {
         assert_eq!(parse_bool_flag("YES".to_string()), Some(true));
         assert_eq!(parse_bool_flag("off".to_string()), Some(false));
         assert_eq!(parse_bool_str("maybe"), None);
+    }
+
+
+    #[test]
+    fn test_ref_02_runtime_types_compile() {
+        use crate::runtime::{
+            context::RuntimeContext,
+            event::RuntimeEvent,
+            frontend::FrontendAdapter,
+            mode::RuntimeMode,
+        };
+        // Zero-cost existence check — if the module tree compiles, this passes.
+        let _ = std::mem::size_of::<RuntimeEvent>();
     }
 
     #[test]
