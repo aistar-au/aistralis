@@ -3,6 +3,9 @@ pub mod event;
 pub mod frontend;
 pub mod r#loop;
 pub mod mode;
+pub mod update;
+
+pub use update::UiUpdate;
 
 pub fn parse_bool_flag(value: String) -> Option<bool> {
     parse_bool_str(value.as_str())
@@ -54,7 +57,7 @@ mod tests {
             fn on_user_input(&mut self, _input: String, _ctx: &mut RuntimeContext) {}
             fn on_model_update(
                 &mut self,
-                _update: crate::app::UiUpdate,
+                _update: crate::runtime::UiUpdate,
                 _ctx: &mut RuntimeContext,
             ) {
             }

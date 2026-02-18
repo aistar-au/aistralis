@@ -3,6 +3,7 @@ use crate::edit_diff::{format_edit_hunks, DEFAULT_EDIT_DIFF_CONTEXT_LINES};
 use crate::runtime::context::RuntimeContext;
 use crate::runtime::mode::RuntimeMode;
 use crate::runtime::parse_bool_flag;
+use crate::runtime::UiUpdate;
 use crate::state::{
     ConversationManager, ConversationStreamUpdate, StreamBlock, ToolApprovalRequest, ToolStatus,
 };
@@ -41,16 +42,6 @@ const TUI_TICK_INTERVAL: Duration = Duration::from_millis(120);
 const REPO_WIDGET_REFRESH_INTERVAL: Duration = Duration::from_millis(1500);
 const MULTILINE_PROMPT_START: &str = "/paste";
 const MULTILINE_PROMPT_END: &str = "/send";
-
-pub enum UiUpdate {
-    StreamDelta(String),
-    StreamBlockStart { index: usize, block: StreamBlock },
-    StreamBlockDelta { index: usize, delta: String },
-    StreamBlockComplete { index: usize },
-    ToolApprovalRequest(ToolApprovalRequest),
-    TurnComplete,
-    Error(String),
-}
 
 struct HistoryState {
     messages: Vec<String>,

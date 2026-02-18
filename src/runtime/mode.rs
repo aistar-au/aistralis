@@ -1,4 +1,4 @@
-use crate::app::UiUpdate;
+use crate::runtime::UiUpdate;
 
 use super::context::RuntimeContext;
 
