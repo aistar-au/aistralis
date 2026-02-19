@@ -1,7 +1,7 @@
 use crate::api::ApiClient;
 use crate::config::Config;
 use crate::runtime::context::RuntimeContext;
-use crate::runtime::frontend::FrontendAdapter;
+use crate::runtime::frontend::{FrontendAdapter, UserInputEvent};
 use crate::runtime::mode::RuntimeMode;
 use crate::runtime::r#loop::Runtime;
 use crate::runtime::UiUpdate;
@@ -17,8 +17,6 @@ use std::io::Stdout;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-
-const INTERRUPT_TOKEN: &str = "__AISTAR_INTERRUPT__";
 
 struct PendingApproval {
     tool_name: String,
@@ -89,7 +87,10 @@ impl TuiMode {
                     .push(format!("[tool approval denied: {context}]"));
                 self.resolve_pending_approval(false);
             }
-            _ => {}
+            _ => {
+                self.history
+                    .push("[invalid selection, expected 1/2/3]".to_string());
+            }
         }
     }
 }
@@ -102,17 +103,6 @@ impl Default for TuiMode {
 
 impl RuntimeMode for TuiMode {
     fn on_user_input(&mut self, input: String, ctx: &mut RuntimeContext) {
-        if input == INTERRUPT_TOKEN {
-            if self.turn_in_progress {
-                ctx.cancel_turn();
-                self.resolve_pending_approval(false);
-                self.turn_in_progress = false;
-                self.active_assistant_index = None;
-                self.history.push("[turn cancelled]".to_string());
-            }
-            return;
-        }
-
         if self.overlay_active() {
             self.handle_approval_input(&input);
             return;
@@ -186,6 +176,16 @@ impl RuntimeMode for TuiMode {
 
     fn is_turn_in_progress(&self) -> bool {
         self.turn_in_progress
+    }
+
+    fn on_interrupt(&mut self, ctx: &mut RuntimeContext) {
+        if self.turn_in_progress {
+            ctx.cancel_turn();
+            self.resolve_pending_approval(false);
+            self.turn_in_progress = false;
+            self.active_assistant_index = None;
+            self.history.push("[turn cancelled]".to_string());
+        }
     }
 }
 
@@ -439,13 +439,13 @@ impl TuiFrontend {
 }
 
 impl FrontendAdapter<TuiMode> for TuiFrontend {
-    fn poll_user_input(&mut self, _mode: &TuiMode) -> Option<String> {
+    fn poll_user_input(&mut self, _mode: &TuiMode) -> Option<UserInputEvent> {
         if poll(Duration::from_millis(16)).unwrap_or(false) {
             if let Ok(event) = read() {
                 match self.editor.apply_event(event) {
                     InputAction::None => {}
-                    InputAction::Submit(value) => return Some(value),
-                    InputAction::Interrupt => return Some(INTERRUPT_TOKEN.to_string()),
+                    InputAction::Submit(value) => return Some(UserInputEvent::Text(value)),
+                    InputAction::Interrupt => return Some(UserInputEvent::Interrupt),
                     InputAction::Quit => self.quit = true,
                 }
             }
@@ -664,6 +664,46 @@ mod tests {
         mode.on_user_input("1".to_string(), &mut ctx);
 
         assert!(response_rx.await.expect("response should resolve"));
+    }
+
+    #[test]
+    fn test_interrupt_event_path_has_no_text_collision() {
+        let mut mode = TuiMode::new();
+        let mut ctx = setup_ctx();
+
+        mode.on_user_input("__AISTAR_INTERRUPT__".to_string(), &mut ctx);
+        assert!(
+            mode.turn_in_progress,
+            "interrupt-like text must be treated as text input"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_invalid_approval_input_keeps_overlay_and_emits_feedback() {
+        let mut ctx = setup_ctx();
+        let mut mode = TuiMode::new();
+        let (response_tx, _response_rx) = tokio::sync::oneshot::channel::<bool>();
+
+        mode.on_model_update(
+            UiUpdate::ToolApprovalRequest(ToolApprovalRequest {
+                tool_name: "read_file".to_string(),
+                input_preview: "{}".to_string(),
+                response_tx,
+            }),
+            &mut ctx,
+        );
+        mode.on_user_input("x".to_string(), &mut ctx);
+
+        assert!(
+            mode.overlay_active(),
+            "overlay should remain active for invalid input"
+        );
+        assert!(
+            mode.history
+                .iter()
+                .any(|line| line.contains("[invalid selection, expected 1/2/3]")),
+            "must provide invalid selection feedback"
+        );
     }
 
     #[tokio::test]

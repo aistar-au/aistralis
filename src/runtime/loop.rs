@@ -1,4 +1,8 @@
-use crate::runtime::{frontend::FrontendAdapter, mode::RuntimeMode, UiUpdate};
+use crate::runtime::{
+    frontend::{FrontendAdapter, UserInputEvent},
+    mode::RuntimeMode,
+    UiUpdate,
+};
 use tokio::sync::mpsc;
 
 use super::context::RuntimeContext;
@@ -28,7 +32,10 @@ impl<M: RuntimeMode> Runtime<M> {
             }
 
             if let Some(input) = frontend.poll_user_input(&self.mode) {
-                self.mode.on_user_input(input, ctx);
+                match input {
+                    UserInputEvent::Text(text) => self.mode.on_user_input(text, ctx),
+                    UserInputEvent::Interrupt => self.mode.on_interrupt(ctx),
+                }
             }
 
             while let Ok(update) = self.update_rx.try_recv() {
@@ -49,7 +56,7 @@ mod tests {
     use std::sync::Arc;
 
     struct HeadlessFrontend {
-        inputs: VecDeque<String>,
+        inputs: VecDeque<UserInputEvent>,
         render_count: usize,
         quit_after: usize,
     }
@@ -57,7 +64,10 @@ mod tests {
     impl HeadlessFrontend {
         fn new(inputs: Vec<&str>, quit_after: usize) -> Self {
             Self {
-                inputs: inputs.into_iter().map(|s| s.to_string()).collect(),
+                inputs: inputs
+                    .into_iter()
+                    .map(|s| UserInputEvent::Text(s.to_string()))
+                    .collect(),
                 render_count: 0,
                 quit_after,
             }
@@ -65,7 +75,7 @@ mod tests {
     }
 
     impl FrontendAdapter<crate::app::TuiMode> for HeadlessFrontend {
-        fn poll_user_input(&mut self, _mode: &crate::app::TuiMode) -> Option<String> {
+        fn poll_user_input(&mut self, _mode: &crate::app::TuiMode) -> Option<UserInputEvent> {
             self.inputs.pop_front()
         }
 

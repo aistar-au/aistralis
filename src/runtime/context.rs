@@ -5,7 +5,7 @@ use tokio::sync::{mpsc, Mutex};
 use tokio_util::sync::CancellationToken;
 
 pub struct RuntimeContext {
-    pub(crate) conversation: Arc<Mutex<ConversationManager>>,
+    conversation: Arc<Mutex<ConversationManager>>,
     pub(crate) update_tx: mpsc::UnboundedSender<UiUpdate>,
     pub(crate) cancel: CancellationToken,
 }
@@ -21,6 +21,19 @@ impl RuntimeContext {
             update_tx,
             cancel,
         }
+    }
+
+    #[cfg(test)]
+    pub fn try_messages_for_api_len(&self) -> Option<usize> {
+        self.conversation
+            .try_lock()
+            .ok()
+            .map(|mgr| mgr.messages_for_api().len())
+    }
+
+    #[cfg(test)]
+    pub async fn messages_for_api_len_async(&self) -> usize {
+        self.conversation.lock().await.messages_for_api().len()
     }
 
     pub fn start_turn(&mut self, input: String) {
@@ -44,11 +57,18 @@ impl RuntimeContext {
             });
 
             let mut textual_block_by_index = std::collections::HashMap::<usize, bool>::new();
+            let mut terminal_emitted = false;
+            let mut emit_terminal = |update: UiUpdate| {
+                if !terminal_emitted {
+                    terminal_emitted = true;
+                    let _ = tx.send(update);
+                }
+            };
             loop {
                 tokio::select! {
                     _ = turn_cancel.cancelled() => {
                         send_handle.abort();
-                        let _ = tx.send(UiUpdate::TurnComplete);
+                        emit_terminal(UiUpdate::TurnComplete);
                         return;
                     }
                     update = delta_rx.recv() => {
@@ -62,14 +82,14 @@ impl RuntimeContext {
 
             match send_handle.await {
                 Ok(Ok(_)) => {
-                    let _ = tx.send(UiUpdate::TurnComplete);
+                    emit_terminal(UiUpdate::TurnComplete);
                 }
                 Ok(Err(e)) => {
-                    let _ = tx.send(UiUpdate::Error(e.to_string()));
+                    emit_terminal(UiUpdate::Error(e.to_string()));
                 }
                 Err(e) => {
                     if !e.is_cancelled() {
-                        let _ = tx.send(UiUpdate::Error(e.to_string()));
+                        emit_terminal(UiUpdate::Error(e.to_string()));
                     }
                 }
             }
@@ -109,7 +129,7 @@ fn forward_conversation_update(
                 index,
                 delta: delta.clone(),
             });
-            if textual_block_by_index.get(&index).copied().unwrap_or(true) {
+            if textual_block_by_index.get(&index).copied().unwrap_or(false) {
                 let _ = tx.send(UiUpdate::StreamDelta(delta));
             }
         }
@@ -188,9 +208,9 @@ mod tests {
             _ => panic!("expected UiUpdate::Error, got something else"),
         }
 
-        let guard = ctx.conversation.blocking_lock();
-        assert!(
-            guard.messages_for_api().is_empty(),
+        assert_eq!(
+            ctx.try_messages_for_api_len(),
+            Some(0),
             "history must stay clean when guard fires"
         );
     }
@@ -356,6 +376,66 @@ data: {"type":"message_stop"}"#.to_string(),
             !leaked_stream_delta,
             "partial_json must not leak into StreamDelta"
         );
+    }
+
+    #[tokio::test]
+    async fn test_ref_08_unknown_index_block_delta_does_not_leak_to_stream_delta() {
+        let (tx, mut rx) = mpsc::unbounded_channel::<UiUpdate>();
+        let mut textual_block_by_index = std::collections::HashMap::new();
+
+        forward_conversation_update(
+            ConversationStreamUpdate::BlockDelta {
+                index: 99,
+                delta: "should_not_mirror".to_string(),
+            },
+            &mut textual_block_by_index,
+            &tx,
+        );
+
+        let mut saw_block_delta = false;
+        let mut saw_stream_delta = false;
+        while let Ok(update) = rx.try_recv() {
+            match update {
+                UiUpdate::StreamBlockDelta { .. } => saw_block_delta = true,
+                UiUpdate::StreamDelta(_) => saw_stream_delta = true,
+                _ => {}
+            }
+        }
+
+        assert!(
+            saw_block_delta,
+            "unknown index should still emit StreamBlockDelta"
+        );
+        assert!(
+            !saw_stream_delta,
+            "unknown index must not mirror to StreamDelta"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_ref_08_cancel_immediate_emits_single_terminal_event_repeatable() {
+        for _ in 0..20 {
+            let (tx, mut rx) = mpsc::unbounded_channel::<UiUpdate>();
+            let client = ApiClient::new_mock(Arc::new(MockApiClient::new(vec![vec![
+                "data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\n\n".to_string(),
+            ]])));
+            let conversation = ConversationManager::new_mock(client, HashMap::new());
+            let mut ctx = RuntimeContext::new(conversation, tx, CancellationToken::new());
+
+            ctx.start_turn("test".to_string());
+            ctx.cancel_turn();
+
+            let mut terminal_count = 0;
+            for _ in 0..8 {
+                match tokio::time::timeout(Duration::from_millis(200), rx.recv()).await {
+                    Ok(Some(UiUpdate::TurnComplete | UiUpdate::Error(_))) => terminal_count += 1,
+                    Ok(Some(_)) => {}
+                    _ => break,
+                }
+            }
+
+            assert_eq!(terminal_count, 1, "must emit exactly one terminal event");
+        }
     }
 
     #[tokio::test]

@@ -1683,6 +1683,19 @@ cal.js
     }
 
     #[test]
+    fn test_ref_08_env_off_disables_tool_confirm_override() {
+        std::env::set_var("AISTAR_TOOL_CONFIRM", "off");
+        assert!(!tool_approval_enabled(false));
+        std::env::remove_var("AISTAR_TOOL_CONFIRM");
+    }
+
+    #[test]
+    fn test_ref_08_env_off_disables_server_event_stream() {
+        std::env::set_var("AISTAR_STREAM_SERVER_EVENTS", "off");
+        assert!(!stream_server_events_enabled());
+        std::env::remove_var("AISTAR_STREAM_SERVER_EVENTS");
+    }
+    #[test]
     fn test_default_tool_approval_enabled_prefers_remote_only() {
         assert!(default_tool_approval_enabled(false));
         assert!(!default_tool_approval_enabled(true));

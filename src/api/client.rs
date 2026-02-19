@@ -601,6 +601,20 @@ mod tests {
     }
 
     #[test]
+    fn test_ref_08_env_off_disables_structured_tool_protocol() {
+        std::env::set_var("AISTAR_STRUCTURED_TOOL_PROTOCOL", "off");
+        let cfg = crate::config::Config {
+            api_key: None,
+            model: "mock-model".to_string(),
+            api_url: "http://localhost:8000/v1/messages".to_string(),
+            anthropic_version: "2023-06-01".to_string(),
+            working_dir: std::path::PathBuf::from("."),
+        };
+        let client = ApiClient::new(&cfg).expect("client should construct");
+        assert!(!client.supports_structured_tool_protocol());
+        std::env::remove_var("AISTAR_STRUCTURED_TOOL_PROTOCOL");
+    }
+    #[test]
     fn test_openai_tool_definitions_match_base_tool_names() {
         let base_names: BTreeSet<String> = tool_definitions()
             .as_array()
