@@ -1,84 +1,120 @@
+use crate::runtime::UiUpdate;
 use crate::state::ConversationManager;
+use futures::StreamExt;
+use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
-/// Borrowed per-tick context passed into every `RuntimeMode` callback.
+/// Capability surface passed to `RuntimeMode` methods.
 ///
-/// The lifetime `'a` is the borrow of `ConversationManager` for one event loop
-/// tick. A future task (REF-04 Track A) will evaluate whether this should
-/// become an owned shape; for now the borrowed form is correct and sufficient.
-///
-/// `start_turn` is still a no-op stub while REF-04 Track A wiring is pending.
-/// The prerequisite dispatch surface from
-/// `TASKS/REF-04-pre-conversation-dispatch-surface.md` is already merged.
-pub struct RuntimeContext<'a> {
-    pub conversation: &'a mut ConversationManager,
+/// Owns `ConversationManager` (not a borrow) so that REF-05's runtime loop
+/// can hold it without a lifetime parameter. See ADR-006 §2.
+pub struct RuntimeContext {
+    pub(crate) conversation: ConversationManager,
+    pub(crate) update_tx: mpsc::UnboundedSender<UiUpdate>,
+    pub(crate) cancel: CancellationToken,
 }
 
-impl<'a> RuntimeContext<'a> {
-    /// Initiate a user turn.
-    ///
-    /// # REF-04 Track A pending — currently a no-op
-    ///
-    /// Full implementation is pending REF-04 Track A follow-up wiring.
-    /// The prerequisite surface from `TASKS/REF-04-pre-conversation-dispatch-surface.md`
-    /// is now available:
-    ///
-    /// - `ConversationManager::push_user_message(&mut self, input: String)`
-    /// - `ConversationManager::messages_for_api(&self) -> Vec<ApiMessage>`
-    /// - `ConversationManager::client(&self) -> Arc<ApiClient>` (provided by REF-04-pre)
-    /// - `ApiClient::create_stream_with_cancel(&self, msgs, token: CancellationToken)`
-    ///
-    /// The anchor test `test_ref_04_start_turn_dispatches` remains `#[ignore]`
-    /// until Track A dispatch wiring is implemented.
-    pub fn start_turn(&mut self, _input: String) {
-        // REF-04 Track A TODO: wire dispatch using the exposed conversation/api surface.
+impl RuntimeContext {
+    pub fn new(
+        conversation: ConversationManager,
+        update_tx: mpsc::UnboundedSender<UiUpdate>,
+        cancel: CancellationToken,
+    ) -> Self {
+        Self {
+            conversation,
+            update_tx,
+            cancel,
+        }
+    }
+
+    pub fn start_turn(&mut self, input: String) {
+        self.conversation.push_user_message(input);
+
+        let turn_cancel = self.cancel.child_token();
+        let tx = self.update_tx.clone();
+        let messages = self.conversation.messages_for_api();
+        let client = self.conversation.client();
+
+        tokio::spawn(async move {
+            let result = client.create_stream_with_cancel(&messages, turn_cancel.clone()).await;
+
+            match result {
+                Ok(mut stream) => {
+                    while let Some(chunk_result) = stream.next().await {
+                        if turn_cancel.is_cancelled() {
+                            break;
+                        }
+
+                        match chunk_result {
+                            Ok(chunk) => {
+                                let text = String::from_utf8_lossy(&chunk).to_string();
+                                let text = text.trim().to_string();
+                                if !text.is_empty() {
+                                    let _ = tx.send(UiUpdate::StreamDelta(text));
+                                }
+                            }
+                            Err(e) => {
+                                let _ = tx.send(UiUpdate::Error(e.to_string()));
+                                return;
+                            }
+                        }
+                    }
+                    let _ = tx.send(UiUpdate::TurnComplete);
+                }
+                Err(e) => {
+                    let _ = tx.send(UiUpdate::Error(e.to_string()));
+                }
+            }
+        });
+    }
+
+    pub fn cancel_turn(&mut self) {
+        self.cancel.cancel();
+        self.cancel = CancellationToken::new();
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::RuntimeContext;
     use crate::api::{mock_client::MockApiClient, ApiClient};
+    use crate::runtime::UiUpdate;
     use crate::state::ConversationManager;
     use std::collections::HashMap;
     use std::sync::Arc;
+    use tokio::sync::mpsc;
+    use tokio_util::sync::CancellationToken;
 
-    fn make_conversation() -> ConversationManager {
-        let mock = Arc::new(MockApiClient::new(vec![]));
-        let client = ApiClient::new_mock(mock);
-        ConversationManager::new_mock(client, HashMap::new())
-    }
+    #[tokio::test]
+    async fn test_ref_04_start_turn_dispatches_message() {
+        let (tx, mut rx) = mpsc::unbounded_channel::<UiUpdate>();
 
-    /// REF-04 anchor — start_turn dispatches a real turn.
-    ///
-    /// IGNORED: pending REF-04 Track A dispatch wiring in `start_turn`.
-    ///
-    /// Required before un-ignoring:
-    ///   - ConversationManager::push_user_message
-    ///   - ConversationManager::messages_for_api
-    ///   - ConversationManager::client() -> Arc<ApiClient>
-    ///   - ApiClient::create_stream_with_cancel (CancellationToken variant)
-    #[test]
-    #[ignore = "REF-04 Track A pending: start_turn dispatch not wired yet"]
-    fn test_ref_04_start_turn_dispatches() {
-        let mut conversation = make_conversation();
-        let mut ctx = RuntimeContext {
-            conversation: &mut conversation,
-        };
-        ctx.start_turn("hello".to_string());
-        // Replace with real assertions once wired:
-        //   assert!(matches!(update_rx.try_recv().unwrap(), UiUpdate::TurnComplete));
-        todo!("wire assertions when REF-04 Track A dispatch wiring lands")
-    }
+        let client = ApiClient::new_mock(Arc::new(MockApiClient::new(vec![vec![
+            "Hello".to_string(),
+            " world".to_string(),
+        ]])));
+        let conversation = ConversationManager::new_mock(client, HashMap::new());
 
-    /// Smoke test — RuntimeContext constructs and start_turn is callable without panicking.
-    /// Must stay green at all times.
-    #[test]
-    fn test_ref_04_runtime_context_constructs() {
-        let mut conversation = make_conversation();
-        let mut ctx = RuntimeContext {
-            conversation: &mut conversation,
-        };
-        // start_turn is a no-op stub (REF-04 gap). Calling it must not panic.
-        ctx.start_turn("probe".to_string());
+        let mut ctx = RuntimeContext::new(conversation, tx, CancellationToken::new());
+
+        ctx.start_turn("test input".to_string());
+
+        let mut saw_delta = false;
+        let mut saw_complete = false;
+        loop {
+            match tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await {
+                Ok(Some(UiUpdate::StreamDelta(_))) => saw_delta = true,
+                Ok(Some(UiUpdate::TurnComplete)) => {
+                    saw_complete = true;
+                    break;
+                }
+                Ok(Some(UiUpdate::Error(e))) => panic!("unexpected error: {e}"),
+                Ok(None) | Err(_) => break,
+                _ => {}
+            }
+        }
+
+        assert!(saw_delta, "expected at least one StreamDelta");
+        assert!(saw_complete, "expected TurnComplete");
     }
 }
