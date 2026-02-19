@@ -1,6 +1,6 @@
 # Task CORE-14: Panic Hook Terminal Restore
 
-**Target File:** `src/app/mod.rs` or `src/main.rs`
+**Target File:** `src/terminal/mod.rs` (hook installation), `src/app/mod.rs` (early registration call)
 
 **ADR:** ADR-013, ADR-011 §4 (terminal lifecycle resilience), ADR-012 gate #7
 

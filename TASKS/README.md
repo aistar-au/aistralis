@@ -8,7 +8,7 @@ tracks, so they can run in parallel across teams or sessions.
 1. `TASKS/ADR-013-tui-completion-deployment-plan.md`
 2. `TASKS/CORE-12-bounded-transcript.md`
 3. `TASKS/CORE-13-dirty-render-guard.md`
-4. `TASKS/CORE-14-panic-hook-terminal-restore.md`
+4. `TASKS/completed/CORE-14-panic-hook-terminal-restore.md`
 5. `TASKS/FEAT-15-scrollback-viewport.md`
 6. `TASKS/FEAT-16-idle-interrupt-input-drop-feedback.md`
 

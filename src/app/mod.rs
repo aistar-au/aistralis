@@ -485,6 +485,8 @@ pub struct App {
 
 impl App {
     pub fn new(config: Config) -> Result<Self> {
+        crate::terminal::install_panic_hook_once();
+
         let client = ApiClient::new(&config)?;
         let executor = ToolExecutor::new(config.working_dir.clone());
         let conversation = ConversationManager::new(client, executor);
