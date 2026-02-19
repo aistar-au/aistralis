@@ -61,7 +61,9 @@ mod tests {
     #[ignore = "REF-04 Track A pending: start_turn dispatch not wired yet"]
     fn test_ref_04_start_turn_dispatches() {
         let mut conversation = make_conversation();
-        let mut ctx = RuntimeContext { conversation: &mut conversation };
+        let mut ctx = RuntimeContext {
+            conversation: &mut conversation,
+        };
         ctx.start_turn("hello".to_string());
         // Replace with real assertions once wired:
         //   assert!(matches!(update_rx.try_recv().unwrap(), UiUpdate::TurnComplete));
@@ -73,7 +75,9 @@ mod tests {
     #[test]
     fn test_ref_04_runtime_context_constructs() {
         let mut conversation = make_conversation();
-        let mut ctx = RuntimeContext { conversation: &mut conversation };
+        let mut ctx = RuntimeContext {
+            conversation: &mut conversation,
+        };
         // start_turn is a no-op stub (REF-04 gap). Calling it must not panic.
         ctx.start_turn("probe".to_string());
     }

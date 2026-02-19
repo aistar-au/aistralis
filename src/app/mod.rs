@@ -92,6 +92,12 @@ impl TuiMode {
     }
 }
 
+impl Default for TuiMode {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RuntimeMode for TuiMode {
     fn on_user_input(&mut self, input: String, ctx: &mut RuntimeContext) {
         if self.overlay.is_some() {

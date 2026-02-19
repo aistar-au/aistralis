@@ -348,10 +348,7 @@ mod tests {
         let after_change_repeat = cache.summarize("a.rs", "abcd");
         assert_eq!(
             after_change_repeat,
-            ReadFileSnapshotSummary::Unchanged {
-                chars: 4,
-                lines: 1
-            }
+            ReadFileSnapshotSummary::Unchanged { chars: 4, lines: 1 }
         );
     }
 
