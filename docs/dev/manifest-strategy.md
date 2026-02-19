@@ -87,6 +87,8 @@ Current highlights include:
 - Core and critical hardening manifests (`CORE-*`, `CRIT-*`, `SEC-*`).
 - Full runtime seam/cutover track:
   `REF-02` through `REF-08` are archived in `TASKS/completed/`.
+- REF-08 delta documentation is archived at
+  `TASKS/completed/REF-08-deltas/` (working copy under `docs/dev/ref-08/`).
 
 If new work is opened, create manifests in `TASKS/` root first, then promote to
 `TASKS/completed/` after verification.

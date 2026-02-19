@@ -1,10 +1,10 @@
 # TASK: REF-08 — Full Runtime-Core Cutover
 
-**Status:** Ready — REF-07 (`test_ref_07_async_run_terminates`, `test_ref_07_no_runtime_guard`) must be green  
+**Status:** Completed (merged to `main` on 2026-02-19)  
 **Track:** REF (Refactor)  
 **Depends on:** REF-07  
 **Blocks:** nothing — this is the final REF track task  
-**ADR:** ADR-006 §6 (Runtime canonical dispatch); ADR-007 (to be created in this task)  
+**ADR:** ADR-006, ADR-007, ADR-008, ADR-009, ADR-010, ADR-011, ADR-012  
 **Scope:** `src/app/mod.rs`, `src/runtime/context.rs`, `src/util/mod.rs` (new),
 `src/lib.rs`, `scripts/` (new), `.github/workflows/arch-contracts.yml` (new),
 `docs/adr/` (updates)
@@ -12,6 +12,30 @@
 > **Greenfield policy:** No users, no production traffic, no compatibility window required.
 > Remove alternate routing immediately. No warn-mode, no dual-path, no fallback.
 > This task is one atomic PR.
+
+---
+
+## Completion Record
+
+REF-08 is completed and archived.
+
+Delivered outcomes:
+
+1. Runtime-core canonical dispatch is the only production turn path.
+2. Architecture contracts are enforced in CI (`check_no_alternate_routing`,
+   `check_forbidden_imports`, and tests).
+3. Runtime parity and safety deltas A-F are documented and verified.
+4. Cutover guardrails and deployment gates are recorded in ADR-008 and ADR-012.
+
+Cutover delta docs:
+
+1. `docs/dev/ref-08/DELTA-A-assistant-stream-separation.md`
+2. `docs/dev/ref-08/DELTA-B-blockdelta-stream-filter.md`
+3. `docs/dev/ref-08/DELTA-C-input-editor-utf8-safety.md`
+4. `docs/dev/ref-08/DELTA-D-frontend-mode-aware-poll-contract.md`
+5. `docs/dev/ref-08/DELTA-E-typed-interrupt-routing.md`
+6. `docs/dev/ref-08/DELTA-F-deterministic-env-tests-and-cancel-progression.md`
+7. `docs/dev/ref-08/review-checklist.md`
 
 ---
 
@@ -564,4 +588,3 @@ async fn test_ref_08_start_turn_full_protocol_parity() {
 - Do not add `#[allow(dead_code)]` to paper over deleted call sites — delete the dead code
 - Do not keep any "transition" comments that reference the old routing path
 - Do not split this into multiple PRs — it lands as one atomic cutover
-
