@@ -16,6 +16,7 @@
 4. **Verification** — Success is `cargo test <anchor_name>` passing, plus `cargo test --all` showing no regressions.
 
 Runtime mode additions and naming-policy changes require explicit confirmation before implementation or documentation. See ADR-007.
+Runtime-core ratatui TUI behavior must conform to ADR-009, ADR-010, and ADR-011 before merge.
 Tests that mutate process environment variables must hold `crate::test_support::ENV_LOCK`; `cargo test --all-targets` must pass without `--test-threads=1`.
 
 See [`docs/dev/manifest-strategy.md`](docs/dev/manifest-strategy.md) for the operational guide.

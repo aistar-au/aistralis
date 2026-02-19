@@ -33,6 +33,9 @@ A task manifest may reference an ADR. An ADR may spawn one or more tasks. They a
 | [ADR-006](ADR-006-runtime-mode-contracts.md) | Runtime mode contracts — `RuntimeMode`, `RuntimeContext`, `RuntimeEvent`, `FrontendAdapter` | Accepted |
 | [ADR-007](ADR-007-runtime-canonical-dispatch-no-alt-routing.md) | Runtime-core canonical dispatch — no alternate routing | Accepted |
 | [ADR-008](ADR-008-runtime-cutover-parity-guardrails.md) | Runtime cutover parity guardrails | Accepted |
+| [ADR-009](ADR-009-runtime-core-tui-interaction-contract.md) | Runtime-core TUI interaction contract | Accepted |
+| [ADR-010](ADR-010-runtime-core-tui-viewport-and-transcript.md) | Runtime-core TUI viewport and transcript model | Accepted |
+| [ADR-011](ADR-011-runtime-core-tui-render-loop-and-lifecycle.md) | Runtime-core TUI render loop and lifecycle | Accepted |
 
 ## Template
 
