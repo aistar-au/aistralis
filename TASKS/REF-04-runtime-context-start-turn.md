@@ -1,10 +1,10 @@
 # TASK: REF-04 — Wire `RuntimeContext::start_turn` to API dispatch
 
-**Status:** Blocked — pending TASKS/REF-04-pre-conversation-dispatch-surface.md  
+**Status:** Ready — REF-04-pre merged; Track A dispatch wiring pending  
 **Phase:** 5 (correctness)  
 **Track:** Runtime seam (REF track)  
 **Depends on:** REF-03 green (`test_ref_03_tui_mode_overlay_blocks_input` passing)  
-**Blocks:** REF-05  
+**Blocks:** REF-04 Track A follow-up dispatch wiring (does not block REF-05)  
 **ADR:** ADR-006 §2 (`RuntimeContext`), §6 (`Runtime<M>` loop)  
 **Scope:** `src/runtime/context.rs` (implementation + anchor unit tests), `src/runtime/mod.rs` (anchor regression fix), `src/app/mod.rs` (call sites only)
 
@@ -16,6 +16,9 @@ REF-02 created a `RuntimeContext<'a>` stub with a **borrowed**
 `&'a mut ConversationManager` and a `start_turn` body that is a no-op
 (`// wired in REF-04`). REF-03 used this borrowed shape in `TuiMode`
 and in the `dummy_ctx()` test helper.
+
+REF-04 Track B is complete and unblocks REF-05. `TASKS/REF-04-pre-conversation-dispatch-surface.md`
+is merged; remaining REF-04 work is Track A dispatch wiring.
 
 REF-04 changes the `RuntimeContext` struct shape in two ways:
 

@@ -5,6 +5,7 @@ use super::context::RuntimeContext;
 
 pub struct Runtime<M: RuntimeMode> {
     pub mode: M,
+    #[allow(dead_code)]
     update_rx: mpsc::UnboundedReceiver<UiUpdate>,
 }
 

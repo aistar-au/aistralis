@@ -6,8 +6,9 @@ use crate::state::ConversationManager;
 /// tick. A future task (REF-04 Track A) will evaluate whether this should
 /// become an owned shape; for now the borrowed form is correct and sufficient.
 ///
-/// `start_turn` is a no-op stub until `TASKS/REF-04-pre-conversation-dispatch-surface.md`
-/// merges and exposes the required methods on `ConversationManager`.
+/// `start_turn` is still a no-op stub while REF-04 Track A wiring is pending.
+/// The prerequisite dispatch surface from
+/// `TASKS/REF-04-pre-conversation-dispatch-surface.md` is already merged.
 pub struct RuntimeContext<'a> {
     pub conversation: &'a mut ConversationManager,
 }
@@ -15,21 +16,21 @@ pub struct RuntimeContext<'a> {
 impl<'a> RuntimeContext<'a> {
     /// Initiate a user turn.
     ///
-    /// # REF-04 gap — currently a no-op
+    /// # REF-04 Track A pending — currently a no-op
     ///
-    /// Full implementation is blocked on `TASKS/REF-04-pre-conversation-dispatch-surface.md`.
-    /// The following must exist before this method can be wired:
+    /// Full implementation is pending REF-04 Track A follow-up wiring.
+    /// The prerequisite surface from `TASKS/REF-04-pre-conversation-dispatch-surface.md`
+    /// is now available:
     ///
     /// - `ConversationManager::push_user_message(&mut self, input: String)`
     /// - `ConversationManager::messages_for_api(&self) -> Vec<ApiMessage>`
-    /// - `ConversationManager::client(&self) -> Arc<ApiClient>` (requires Arc refactor)
+    /// - `ConversationManager::client(&self) -> Arc<ApiClient>` (provided by REF-04-pre)
     /// - `ApiClient::create_stream_with_cancel(&self, msgs, token: CancellationToken)`
     ///
-    /// The anchor test `test_ref_04_start_turn_dispatches` is marked `#[ignore]`
-    /// and must be un-ignored only after REF-04-pre merges **and** Track A wiring
-    /// is complete.
+    /// The anchor test `test_ref_04_start_turn_dispatches` remains `#[ignore]`
+    /// until Track A dispatch wiring is implemented.
     pub fn start_turn(&mut self, _input: String) {
-        // REF-04: gap — dispatch surface not yet exposed on ConversationManager
+        // REF-04 Track A TODO: wire dispatch using the exposed conversation/api surface.
     }
 }
 
@@ -49,8 +50,7 @@ mod tests {
 
     /// REF-04 anchor — start_turn dispatches a real turn.
     ///
-    /// IGNORED: blocked on TASKS/REF-04-pre-conversation-dispatch-surface.md.
-    /// Un-ignore after REF-04-pre merges AND start_turn is wired in Track A.
+    /// IGNORED: pending REF-04 Track A dispatch wiring in `start_turn`.
     ///
     /// Required before un-ignoring:
     ///   - ConversationManager::push_user_message
@@ -58,14 +58,14 @@ mod tests {
     ///   - ConversationManager::client() -> Arc<ApiClient>
     ///   - ApiClient::create_stream_with_cancel (CancellationToken variant)
     #[test]
-    #[ignore = "REF-04-pre gap: ConversationManager dispatch surface not yet exposed"]
+    #[ignore = "REF-04 Track A pending: start_turn dispatch not wired yet"]
     fn test_ref_04_start_turn_dispatches() {
         let mut conversation = make_conversation();
         let mut ctx = RuntimeContext { conversation: &mut conversation };
         ctx.start_turn("hello".to_string());
         // Replace with real assertions once wired:
         //   assert!(matches!(update_rx.try_recv().unwrap(), UiUpdate::TurnComplete));
-        todo!("wire assertions when REF-04-pre lands")
+        todo!("wire assertions when REF-04 Track A dispatch wiring lands")
     }
 
     /// Smoke test — RuntimeContext constructs and start_turn is callable without panicking.

@@ -44,27 +44,32 @@ const REPO_WIDGET_REFRESH_INTERVAL: Duration = Duration::from_millis(1500);
 const MULTILINE_PROMPT_START: &str = "/paste";
 const MULTILINE_PROMPT_END: &str = "/send";
 
+#[allow(dead_code)]
 struct HistoryState {
     messages: Vec<String>,
     scroll: usize,
 }
 
+#[allow(dead_code)]
 struct InputState {
     buffer: String,
     cursor_byte: usize,
 }
 
+#[allow(dead_code)]
 enum OverlayKind {
     ToolPermission(ToolApprovalRequest),
     Error(String),
 }
 
+#[allow(dead_code)]
 struct OverlayState {
     kind: OverlayKind,
 }
 
 pub struct TuiMode {
     history: HistoryState,
+    #[allow(dead_code)]
     input: InputState,
     overlay: Option<OverlayState>,
     turn_in_progress: bool,
@@ -293,6 +298,7 @@ impl StreamPrinter {
         self.tool_status_history.clear();
     }
 
+    #[allow(dead_code)]
     fn has_streamed_delta(&self) -> bool {
         self.streamed_any_delta
     }
@@ -301,6 +307,7 @@ impl StreamPrinter {
         self.frame_interval
     }
 
+    #[allow(dead_code)]
     fn saw_response_block(&self) -> bool {
         self.saw_response_block
     }

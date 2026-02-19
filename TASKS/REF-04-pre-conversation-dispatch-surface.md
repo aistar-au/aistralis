@@ -1,6 +1,6 @@
 # TASK: REF-04-pre — Expose ConversationManager dispatch surface
 
-**Status:** Ready (prerequisite for REF-04 Track A)
+**Status:** Merged (prerequisite for REF-04 Track A satisfied)
 **Blocks:** REF-04 `start_turn` implementation
 **Scope:** `src/state/conversation.rs`, `src/api/client.rs`
 
@@ -8,10 +8,9 @@
 
 ## Why this exists
 
-`RuntimeContext::start_turn` is currently a no-op stub. REF-04 §0 discovery
-confirmed that all four methods it needs are gaps in the current API surface.
-This task adds exactly those methods — nothing more — so REF-04 Track A can
-wire `start_turn` without scope creep.
+`RuntimeContext::start_turn` is still a no-op stub until REF-04 Track A is wired.
+REF-04 §0 discovery originally identified four API-surface gaps. This task
+added those methods with minimal scope so Track A can implement dispatch.
 
 ---
 
@@ -52,14 +51,14 @@ passing across async tasks, it needs to be `Arc`-wrapped.
 
 In `src/state/conversation.rs`:
 - Change field `client: ApiClient` → `client: Arc<ApiClient>`
-- Update `new(client, executor)` to accept `Arc<ApiClient>` or wrap internally
-- Update `new_mock(client, ...)` similarly
+- Keep `new(client, executor)` and `new_mock(client, ...)` taking `ApiClient`,
+  and wrap internally with `Arc::new(client)`
 - Add accessor: `pub fn client(&self) -> Arc<ApiClient> { Arc::clone(&self.client) }`
 
 In `src/app/mod.rs`:
-- Wherever `App::new()` constructs `ConversationManager::new(client, ...)`,
-  wrap `client` in `Arc::new(client)` first
-- Confirm no other construction sites remain
+- Keep `App::new()` constructing `ConversationManager::new(client, ...)`
+  without call-site `Arc::new(...)` wrapping
+- Confirm no other construction sites rely on call-site wrapping
 
 **Grep to find all construction sites before starting:**
 ```bash

@@ -1,9 +1,9 @@
 # TASK: REF-05 — Generic `Runtime<M>` loop skeleton
 
-**Status:** Ready
+**Status:** Merged
 **Phase:** 5 (runtime loop)
 **Track:** Runtime seam
-**Depends on:** REF-03 green, REF-04 Track B merged (stub present, anchor green)
+**Depends on:** REF-03 green, REF-04 Track B merged (already satisfied)
 **Blocks:** REF-06 (TuiFrontend wiring)
 **Scope:** `src/runtime/loop.rs` (implementation + anchor unit tests)
 
