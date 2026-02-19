@@ -93,6 +93,7 @@ impl ApiClient {
         messages: &[ApiMessage],
         token: tokio_util::sync::CancellationToken,
     ) -> Result<ByteStream> {
+        // TODO(REF-04): wire cancellation into stream request lifecycle.
         let _ = token;
         self.create_stream(messages).await
     }
