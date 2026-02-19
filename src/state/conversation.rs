@@ -118,10 +118,7 @@ impl ConversationManager {
         stream_delta_tx: Option<&mpsc::UnboundedSender<ConversationStreamUpdate>>,
     ) -> Result<String> {
         self.current_turn_blocks.clear();
-        self.api_messages.push(ApiMessage {
-            role: "user".to_string(),
-            content: Content::Text(content),
-        });
+        self.push_user_message(content);
 
         let use_structured_tool_protocol = self.client.supports_structured_tool_protocol();
         let use_structured_blocks = structured_blocks_enabled();
