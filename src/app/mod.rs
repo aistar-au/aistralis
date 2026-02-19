@@ -7,12 +7,11 @@ use crate::runtime::r#loop::Runtime;
 use crate::runtime::UiUpdate;
 use crate::state::{ConversationManager, ToolApprovalRequest};
 use crate::tools::ToolExecutor;
+use crate::ui::layout::split_three_pane_layout;
 use crate::ui::render::{input_visual_rows, render_input, render_messages, render_status_line};
 use anyhow::Result;
 use crossterm::event::{poll, read, Event, KeyCode, KeyEvent, KeyModifiers};
-use ratatui::{
-    backend::CrosstermBackend, layout::Constraint, layout::Direction, layout::Layout, Terminal,
-};
+use ratatui::{backend::CrosstermBackend, Frame, Terminal};
 use std::io::Stdout;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -455,6 +454,16 @@ impl TuiFrontend {
     }
 }
 
+fn draw_tui_frame(frame: &mut Frame<'_>, mode: &TuiMode, input_state: &InputState) {
+    let input_rows =
+        input_visual_rows(&input_state.buffer, frame.area().width as usize).clamp(1, 6) as u16;
+    let panes = split_three_pane_layout(frame.area(), input_rows);
+
+    render_status_line(frame, panes.header, mode.status());
+    render_messages(frame, panes.history, &mode.history_state.lines, 0);
+    render_input(frame, panes.input, &input_state.buffer, input_state.cursor);
+}
+
 impl FrontendAdapter<TuiMode> for TuiFrontend {
     fn poll_user_input(&mut self, _mode: &TuiMode) -> Option<UserInputEvent> {
         if poll(Duration::from_millis(16)).unwrap_or(false) {
@@ -471,27 +480,9 @@ impl FrontendAdapter<TuiMode> for TuiFrontend {
     }
 
     fn render(&mut self, mode: &TuiMode) {
+        let input_state = &self.editor.input_state;
         let _ = self.terminal.draw(|frame| {
-            let input_rows =
-                input_visual_rows(&self.editor.input_state.buffer, frame.area().width as usize)
-                    .clamp(1, 6) as u16;
-            let chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Min(1),
-                    Constraint::Length(1),
-                    Constraint::Length(input_rows),
-                ])
-                .split(frame.area());
-
-            render_messages(frame, chunks[0], &mode.history_state.lines, 0);
-            render_status_line(frame, chunks[1], mode.status());
-            render_input(
-                frame,
-                chunks[2],
-                &self.editor.input_state.buffer,
-                self.editor.input_state.cursor,
-            );
+            draw_tui_frame(frame, mode, input_state);
         });
     }
 
