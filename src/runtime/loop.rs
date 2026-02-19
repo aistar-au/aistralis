@@ -13,7 +13,7 @@ impl<M: RuntimeMode> Runtime<M> {
     pub fn new(mode: M, update_rx: mpsc::UnboundedReceiver<UiUpdate>) -> Self {
         Self { mode, update_rx }
     }
-    pub fn run<F>(&mut self, frontend: &mut F, ctx: &mut RuntimeContext<'_>)
+    pub fn run<F>(&mut self, frontend: &mut F, ctx: &mut RuntimeContext)
     where
         F: FrontendAdapter,
     {
@@ -73,16 +73,18 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_ref_05_headless_loop_terminates() {
+    #[tokio::test]
+    async fn test_ref_05_headless_loop_terminates() {
         let mock = Arc::new(MockApiClient::new(vec![]));
         let client = ApiClient::new_mock(mock);
-        let mut conversation = ConversationManager::new_mock(client, HashMap::new());
-        let mut ctx = RuntimeContext {
-            conversation: &mut conversation,
-        };
+        let conversation = ConversationManager::new_mock(client, HashMap::new());
 
-        let (_tx, update_rx) = mpsc::unbounded_channel::<UiUpdate>();
+        let (tx, update_rx) = mpsc::unbounded_channel::<UiUpdate>();
+        let mut ctx = RuntimeContext::new(
+            conversation,
+            tx,
+            tokio_util::sync::CancellationToken::new(),
+        );
         let mode = crate::app::TuiMode::new();
         let mut runtime = Runtime::new(mode, update_rx);
 
