@@ -32,6 +32,7 @@ A task manifest may reference an ADR. An ADR may spawn one or more tasks. They a
 | [ADR-005](ADR-005-cfg-test-mock-injection.md) | `#[cfg(test)]` mock injection field on production `ApiClient` struct | Accepted |
 | [ADR-006](ADR-006-runtime-mode-contracts.md) | Runtime mode contracts — `RuntimeMode`, `RuntimeContext`, `RuntimeEvent`, `FrontendAdapter` | Accepted |
 | [ADR-007](ADR-007-runtime-canonical-dispatch-no-alt-routing.md) | Runtime-core canonical dispatch — no alternate routing | Accepted |
+| [ADR-008](ADR-008-runtime-cutover-parity-guardrails.md) | Runtime cutover parity guardrails | Accepted |
 
 ## Template
 
