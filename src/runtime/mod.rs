@@ -45,7 +45,7 @@ mod tests {
 
         struct DummyFrontend;
         impl FrontendAdapter<DummyMode> for DummyFrontend {
-            fn poll_user_input(&mut self) -> Option<String> {
+            fn poll_user_input(&mut self, _mode: &DummyMode) -> Option<String> {
                 None
             }
             fn render(&mut self, _mode: &DummyMode) {}

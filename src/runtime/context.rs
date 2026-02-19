@@ -1,5 +1,5 @@
 use crate::runtime::UiUpdate;
-use crate::state::{ConversationManager, ConversationStreamUpdate};
+use crate::state::{ConversationManager, ConversationStreamUpdate, StreamBlock};
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use tokio_util::sync::CancellationToken;
@@ -43,6 +43,7 @@ impl RuntimeContext {
                 mgr.send_message(input, Some(&delta_tx)).await
             });
 
+            let mut textual_block_by_index = std::collections::HashMap::<usize, bool>::new();
             loop {
                 tokio::select! {
                     _ = turn_cancel.cancelled() => {
@@ -52,22 +53,7 @@ impl RuntimeContext {
                     }
                     update = delta_rx.recv() => {
                         match update {
-                            Some(ConversationStreamUpdate::Delta(text)) => {
-                                let _ = tx.send(UiUpdate::StreamDelta(text));
-                            }
-                            Some(ConversationStreamUpdate::BlockStart { index, block }) => {
-                                let _ = tx.send(UiUpdate::StreamBlockStart { index, block });
-                            }
-                            Some(ConversationStreamUpdate::BlockDelta { index, delta }) => {
-                                let _ = tx.send(UiUpdate::StreamBlockDelta { index, delta: delta.clone() });
-                                let _ = tx.send(UiUpdate::StreamDelta(delta));
-                            }
-                            Some(ConversationStreamUpdate::BlockComplete { index }) => {
-                                let _ = tx.send(UiUpdate::StreamBlockComplete { index });
-                            }
-                            Some(ConversationStreamUpdate::ToolApprovalRequest(request)) => {
-                                let _ = tx.send(UiUpdate::ToolApprovalRequest(request));
-                            }
+                            Some(update) => forward_conversation_update(update, &mut textual_block_by_index, &tx),
                             None => break,
                         }
                     }
@@ -96,12 +82,53 @@ impl RuntimeContext {
     }
 }
 
+fn forward_conversation_update(
+    update: ConversationStreamUpdate,
+    textual_block_by_index: &mut std::collections::HashMap<usize, bool>,
+    tx: &mpsc::UnboundedSender<UiUpdate>,
+) {
+    match update {
+        ConversationStreamUpdate::Delta(text) => {
+            let _ = tx.send(UiUpdate::StreamDelta(text));
+        }
+        ConversationStreamUpdate::BlockStart { index, block } => {
+            let is_textual = matches!(
+                block,
+                StreamBlock::Thinking { .. } | StreamBlock::FinalText { .. }
+            );
+            textual_block_by_index.insert(index, is_textual);
+            if let StreamBlock::FinalText { content } = &block {
+                if !content.is_empty() {
+                    let _ = tx.send(UiUpdate::StreamDelta(content.clone()));
+                }
+            }
+            let _ = tx.send(UiUpdate::StreamBlockStart { index, block });
+        }
+        ConversationStreamUpdate::BlockDelta { index, delta } => {
+            let _ = tx.send(UiUpdate::StreamBlockDelta {
+                index,
+                delta: delta.clone(),
+            });
+            if textual_block_by_index.get(&index).copied().unwrap_or(true) {
+                let _ = tx.send(UiUpdate::StreamDelta(delta));
+            }
+        }
+        ConversationStreamUpdate::BlockComplete { index } => {
+            textual_block_by_index.remove(&index);
+            let _ = tx.send(UiUpdate::StreamBlockComplete { index });
+        }
+        ConversationStreamUpdate::ToolApprovalRequest(request) => {
+            let _ = tx.send(UiUpdate::ToolApprovalRequest(request));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::RuntimeContext;
+    use super::{forward_conversation_update, RuntimeContext};
     use crate::api::{mock_client::MockApiClient, ApiClient};
     use crate::runtime::UiUpdate;
-    use crate::state::ConversationManager;
+    use crate::state::{ConversationManager, ConversationStreamUpdate, StreamBlock};
     use std::collections::HashMap;
     use std::sync::Arc;
     use std::time::Duration;
@@ -276,6 +303,59 @@ data: {"type":"message_stop"}"#.to_string(),
         assert!(saw_request, "must forward tool approval request");
         assert!(saw_complete, "must finish turn after approval response");
         std::env::remove_var("AISTAR_TOOL_CONFIRM");
+    }
+
+    #[tokio::test]
+    async fn test_ref_08_block_delta_partial_json_not_mirrored_to_stream_delta() {
+        let (tx, mut rx) = mpsc::unbounded_channel::<UiUpdate>();
+        let mut textual_block_by_index = std::collections::HashMap::new();
+
+        forward_conversation_update(
+            ConversationStreamUpdate::BlockStart {
+                index: 1,
+                block: StreamBlock::ToolCall {
+                    id: "toolu_1".to_string(),
+                    name: "read_file".to_string(),
+                    input: serde_json::json!({}),
+                    status: crate::state::ToolStatus::Pending,
+                },
+            },
+            &mut textual_block_by_index,
+            &tx,
+        );
+
+        forward_conversation_update(
+            ConversationStreamUpdate::BlockDelta {
+                index: 1,
+                delta: "{\"path\":\"file.txt\"}".to_string(),
+            },
+            &mut textual_block_by_index,
+            &tx,
+        );
+
+        let mut saw_block_delta = false;
+        let mut leaked_stream_delta = false;
+        for _ in 0..4 {
+            match rx.try_recv() {
+                Ok(UiUpdate::StreamBlockDelta { delta, .. }) if delta.contains("path") => {
+                    saw_block_delta = true
+                }
+                Ok(UiUpdate::StreamDelta(text)) if text.contains("path") => {
+                    leaked_stream_delta = true
+                }
+                Ok(_) => {}
+                Err(_) => break,
+            }
+        }
+
+        assert!(
+            saw_block_delta,
+            "expected StreamBlockDelta from partial_json"
+        );
+        assert!(
+            !leaked_stream_delta,
+            "partial_json must not leak into StreamDelta"
+        );
     }
 
     #[tokio::test]

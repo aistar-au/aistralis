@@ -31,6 +31,7 @@ pub struct TuiMode {
     pending_approval: Option<PendingApproval>,
     auto_approve_session: bool,
     turn_in_progress: bool,
+    active_assistant_index: Option<usize>,
 }
 
 impl TuiMode {
@@ -40,6 +41,7 @@ impl TuiMode {
             pending_approval: None,
             auto_approve_session: false,
             turn_in_progress: false,
+            active_assistant_index: None,
         }
     }
 
@@ -105,6 +107,7 @@ impl RuntimeMode for TuiMode {
                 ctx.cancel_turn();
                 self.resolve_pending_approval(false);
                 self.turn_in_progress = false;
+                self.active_assistant_index = None;
                 self.history.push("[turn cancelled]".to_string());
             }
             return;
@@ -120,6 +123,8 @@ impl RuntimeMode for TuiMode {
         }
 
         self.history.push(format!("> {input}"));
+        self.history.push(String::new());
+        self.active_assistant_index = Some(self.history.len() - 1);
         self.turn_in_progress = true;
         ctx.start_turn(input);
     }
@@ -127,10 +132,17 @@ impl RuntimeMode for TuiMode {
     fn on_model_update(&mut self, update: UiUpdate, _ctx: &mut RuntimeContext) {
         match update {
             UiUpdate::StreamDelta(text) => {
-                if let Some(last) = self.history.last_mut() {
-                    last.push_str(&text);
-                } else {
-                    self.history.push(text);
+                let idx = match self.active_assistant_index {
+                    Some(idx) => idx,
+                    None => {
+                        self.history.push(String::new());
+                        let idx = self.history.len() - 1;
+                        self.active_assistant_index = Some(idx);
+                        idx
+                    }
+                };
+                if let Some(line) = self.history.get_mut(idx) {
+                    line.push_str(&text);
                 }
             }
             UiUpdate::StreamBlockStart { .. }
@@ -161,11 +173,13 @@ impl RuntimeMode for TuiMode {
             UiUpdate::TurnComplete => {
                 self.resolve_pending_approval(false);
                 self.turn_in_progress = false;
+                self.active_assistant_index = None;
             }
             UiUpdate::Error(msg) => {
                 self.resolve_pending_approval(false);
                 self.history.push(format!("[error] {msg}"));
                 self.turn_in_progress = false;
+                self.active_assistant_index = None;
             }
         }
     }
@@ -209,6 +223,37 @@ impl InputEditor {
         }
     }
 
+    fn clamp_cursor_to_boundary_left(&self, mut idx: usize) -> usize {
+        idx = idx.min(self.buffer.len());
+        while idx > 0 && !self.buffer.is_char_boundary(idx) {
+            idx -= 1;
+        }
+        idx
+    }
+
+    fn prev_char_boundary(&self, idx: usize) -> usize {
+        let i = self.clamp_cursor_to_boundary_left(idx);
+        if i == 0 {
+            return 0;
+        }
+        let mut j = i - 1;
+        while j > 0 && !self.buffer.is_char_boundary(j) {
+            j -= 1;
+        }
+        j
+    }
+
+    fn next_char_boundary(&self, idx: usize) -> usize {
+        let i = self.clamp_cursor_to_boundary_left(idx);
+        if i >= self.buffer.len() {
+            return self.buffer.len();
+        }
+        match self.buffer[i..].chars().next() {
+            Some(ch) => i + ch.len_utf8(),
+            None => self.buffer.len(),
+        }
+    }
+
     fn snapshot(&self) -> EditorSnapshot {
         EditorSnapshot {
             buffer: self.buffer.clone(),
@@ -223,30 +268,36 @@ impl InputEditor {
 
     fn restore(&mut self, snap: EditorSnapshot) {
         self.buffer = snap.buffer;
-        self.cursor = snap.cursor.min(self.buffer.len());
+        self.cursor = self.clamp_cursor_to_boundary_left(snap.cursor);
     }
 
     fn insert_str(&mut self, value: &str) {
+        let cursor = self.clamp_cursor_to_boundary_left(self.cursor);
         self.push_undo();
-        self.buffer.insert_str(self.cursor, value);
-        self.cursor += value.len();
+        self.buffer.insert_str(cursor, value);
+        self.cursor = cursor + value.len();
     }
 
     fn backspace(&mut self) {
-        if self.cursor == 0 {
+        let end = self.clamp_cursor_to_boundary_left(self.cursor);
+        if end == 0 {
             return;
         }
+        let start = self.prev_char_boundary(end);
         self.push_undo();
-        self.cursor -= 1;
-        self.buffer.remove(self.cursor);
+        self.buffer.replace_range(start..end, "");
+        self.cursor = start;
     }
 
     fn delete(&mut self) {
-        if self.cursor >= self.buffer.len() {
+        let start = self.clamp_cursor_to_boundary_left(self.cursor);
+        if start >= self.buffer.len() {
             return;
         }
+        let end = self.next_char_boundary(start);
         self.push_undo();
-        self.buffer.remove(self.cursor);
+        self.buffer.replace_range(start..end, "");
+        self.cursor = start;
     }
 
     fn submit(&mut self) -> Option<String> {
@@ -349,10 +400,10 @@ impl InputEditor {
             KeyCode::Backspace => self.backspace(),
             KeyCode::Delete => self.delete(),
             KeyCode::Left => {
-                self.cursor = self.cursor.saturating_sub(1);
+                self.cursor = self.prev_char_boundary(self.cursor);
             }
             KeyCode::Right => {
-                self.cursor = (self.cursor + 1).min(self.buffer.len());
+                self.cursor = self.next_char_boundary(self.cursor);
             }
             KeyCode::Home => self.cursor = 0,
             KeyCode::End => self.cursor = self.buffer.len(),
@@ -388,7 +439,7 @@ impl TuiFrontend {
 }
 
 impl FrontendAdapter<TuiMode> for TuiFrontend {
-    fn poll_user_input(&mut self) -> Option<String> {
+    fn poll_user_input(&mut self, _mode: &TuiMode) -> Option<String> {
         if poll(Duration::from_millis(16)).unwrap_or(false) {
             if let Ok(event) = read() {
                 match self.editor.apply_event(event) {
@@ -513,6 +564,17 @@ mod tests {
     }
 
     #[test]
+    fn test_ref_08_stream_delta_appends_to_assistant_placeholder_not_user_line() {
+        let mut mode = TuiMode::new();
+        let mut ctx = setup_ctx();
+        mode.on_user_input("hello".to_string(), &mut ctx);
+        mode.on_model_update(UiUpdate::StreamDelta("assistant".to_string()), &mut ctx);
+
+        assert_eq!(mode.history[0], "> hello");
+        assert_eq!(mode.history[1], "assistant");
+    }
+
+    #[test]
     fn test_editor_cursor_navigation() {
         let mut editor = InputEditor::new();
         editor.apply_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
@@ -567,6 +629,22 @@ mod tests {
         let mut editor = InputEditor::new();
         let _ = editor.apply_event(Event::Paste("hello".to_string()));
         assert_eq!(editor.buffer, "hello");
+    }
+
+    #[test]
+    fn test_input_editor_unicode_cursor_backspace_delete_safe() {
+        let mut editor = InputEditor::new();
+        editor.insert_str("a😀b");
+        editor.cursor = editor.buffer.len();
+        editor.backspace();
+        assert_eq!(editor.buffer, "a😀");
+        editor.backspace();
+        assert_eq!(editor.buffer, "a");
+
+        editor.insert_str("😀b");
+        editor.cursor = 1; // intentionally non-boundary
+        editor.delete();
+        assert_eq!(editor.buffer, "ab");
     }
 
     #[tokio::test]

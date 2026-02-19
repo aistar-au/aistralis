@@ -27,7 +27,7 @@ impl<M: RuntimeMode> Runtime<M> {
                 break;
             }
 
-            if let Some(input) = frontend.poll_user_input() {
+            if let Some(input) = frontend.poll_user_input(&self.mode) {
                 self.mode.on_user_input(input, ctx);
             }
 
@@ -65,7 +65,7 @@ mod tests {
     }
 
     impl FrontendAdapter<crate::app::TuiMode> for HeadlessFrontend {
-        fn poll_user_input(&mut self) -> Option<String> {
+        fn poll_user_input(&mut self, _mode: &crate::app::TuiMode) -> Option<String> {
             self.inputs.pop_front()
         }
 
