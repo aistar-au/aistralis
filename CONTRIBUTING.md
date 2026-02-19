@@ -13,11 +13,16 @@
 1. **Identify task** — Check `TASKS/` for open items.
 2. **Anchor test** — Every task has exactly one failing Rust test before work begins. No anchor, no dispatch.
 3. **Module isolation** — Work is confined to the `Target File` named in the task manifest (± one helper file).
-4. **Verification** — Success is `cargo test <anchor_name>` passing, plus `cargo test --all` showing no regressions.
+4. **Verification** — Success is `cargo test <anchor_name>` passing, plus `cargo test --all-targets` showing no regressions.
 
 Runtime mode additions and naming-policy changes require explicit confirmation before implementation or documentation. See ADR-007.
+Canonical production dispatch is runtime-core only: `Runtime<M>::run` → `RuntimeMode::on_user_input` → `RuntimeContext::start_turn`.
+Alternate app-owned dispatch channels are forbidden in production paths.
 Runtime-core ratatui TUI behavior must conform to ADR-009, ADR-010, and ADR-011 before merge.
 Runtime-core TUI deployment is gated by ADR-012; no deploy if any ADR-012 item is unmet.
+Architecture gates enforcing ADR-007 must remain green:
+`bash scripts/check_no_alternate_routing.sh`
+`bash scripts/check_forbidden_imports.sh`
 Tests that mutate process environment variables must hold `crate::test_support::ENV_LOCK`; `cargo test --all-targets` must pass without `--test-threads=1`.
 
 See [`docs/dev/manifest-strategy.md`](docs/dev/manifest-strategy.md) for the operational guide.
@@ -39,23 +44,11 @@ Completed tasks move to `TASKS/completed/` — do not delete them.
 
 ---
 
-## 🗺️ Active Roadmap
+## 🗺️ Runtime-core Status
 
-### REF track — Runtime seam (headless-first refactor)
-
-> **Architectural decision:** [ADR-004](docs/adr/ADR-004-runtime-seam-headless-first.md)  
-> **Goal:** Decouple the conversation loop from the terminal renderer so headless execution and a proper TUI become independent concerns.  
-> **Scope rule during this track:** No new CLI flags, tools, or protocol changes.
-
-| Task | Target | Status |
-| :--- | :--- | :--- |
-| REF-02 | Define `RuntimeEvent`, `RuntimeContext`, `RuntimeMode` trait | Planned |
-| REF-03 | Implement `RuntimeMode` for existing stdout renderer | Planned |
-| REF-04 | Map `crossterm::event::Event` → `RuntimeEvent` | Planned |
-| REF-05 | Generic runtime loop replacing `App::run()` | Planned |
-| REF-06 | Extract TUI mode as a second `RuntimeMode` implementor | Planned |
-
-Each REF task has its own manifest in `TASKS/`. Do not work on REF-03 before REF-02's anchor test passes.
+REF-08 full cutover is complete and merged (2026-02-19).
+Canonical dispatch and layering rules are now governed by ADR-007 and ADR-008.
+Historical REF manifests remain archived under `TASKS/completed/`.
 
 ---
 
@@ -67,7 +60,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 source "$HOME/.cargo/env"
 
 # 2. Verify the environment
-cargo test --all
+cargo test --all-targets
 
 # 3. Pick a task from TASKS/, read its manifest, identify the anchor test
 
@@ -75,7 +68,9 @@ cargo test --all
 cargo test test_crit_XX_anchor_name -- --nocapture
 
 # 5. Confirm no regressions
-cargo test --all
+cargo test --all-targets
+bash scripts/check_no_alternate_routing.sh
+bash scripts/check_forbidden_imports.sh
 ```
 
 ---
@@ -99,13 +94,13 @@ aistar/
 │   ├── CRIT-01-protocol.md
 │   ├── CORE-01-sse-parser.md
 │   ├── SEC-01-path-security.md
-│   └── COMPLETED/
+│   └── completed/
 ├── src/
 │   ├── api/                       # HTTP client, stream parser, mock
-│   ├── app/                       # Stdout renderer + App event loop
+│   ├── app/                       # TUI mode + frontend wiring to runtime core
 │   ├── config/                    # Environment variable loading
 │   ├── edit_diff/                 # LCS-based diff renderer
-│   ├── runtime/                   # (planned REF track) RuntimeMode trait
+│   ├── runtime/                   # Canonical runtime loop, mode traits, updates
 │   ├── state/                     # ConversationManager, message history
 │   ├── terminal/                  # ratatui/crossterm setup (TUI skeleton)
 │   ├── tools/                     # ToolExecutor — filesystem + git

@@ -26,6 +26,9 @@ and overlays.
    surfaces, not only status-line text.
 6. MUST: Overlay focus rules MUST define which inputs are consumed by overlay
    vs compose editor.
+7. MUST: Active TUI composition MUST preserve a deterministic three-area base
+   frame (`header/status`, transcript viewport, compose input), with overlays
+   rendered as a top layer that does not alter base-pane geometry.
 
 ## Rationale
 
@@ -37,9 +40,12 @@ focus management, especially during tool approvals and long sessions.
 1. Additional UI state for viewport offset and auto-follow.
 2. Additional structured transcript types.
 3. Additional tests for overlay focus and scroll correctness.
+4. Deterministic frame composition checks for base-pane order and overlay z-order.
 
 ## Compliance checks
 
 1. Tests for viewport navigation and scroll retention under streaming updates.
 2. Tests for bounded transcript memory policy.
 3. Tests that approval overlay is visible and focus-correct.
+4. Tests that base-frame composition remains `header/status -> transcript -> input`
+   and overlay render occurs last without changing pane geometry.

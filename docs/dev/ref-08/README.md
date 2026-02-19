@@ -25,3 +25,5 @@ This directory captures the reviewed REF-08 cutover deltas that were staged in
 - Delta E/F document the remaining REF-008 guardrails implemented on this
   branch (typed interrupt behavior, post-cancel progression proof, and
   deterministic env-mutating tests).
+- Merged `main` history (including PR-13 commit `0e83eef`) continues to enforce
+  ADR-007 no-alternate-message-routing checks.

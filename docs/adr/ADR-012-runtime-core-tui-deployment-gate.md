@@ -35,9 +35,11 @@ implemented and verified:
 3. Viewport/scrollback:
    transcript viewport MUST support `PageUp`, `PageDown`, `Home`, `End`, and
    auto-follow state.
-4. Overlay rendering:
-   approval/error overlays MUST render as modal surfaces and own focus while
-   active.
+4. Overlay rendering and frame composition:
+   approval/error overlays MUST render as modal surfaces on top of a
+   deterministic three-area base frame (`header/status`, transcript viewport,
+   compose input), MUST own focus while active, and MUST NOT alter base-pane
+   geometry.
 5. Transcript retention:
    transcript memory MUST be bounded (ring buffer or compaction).
 6. Render-loop efficiency:
@@ -56,8 +58,9 @@ implemented and verified:
    `bash scripts/check_forbidden_imports.sh`
 3. New targeted tests are required for each gate above:
    input preservation, idle `Ctrl+C`, scrollback behavior, overlay visibility
-   and focus routing, transcript retention, idle redraw behavior, terminal
-   restore behavior.
+   and focus routing, three-area frame composition and overlay z-order/geometry
+   invariance, transcript retention, idle redraw behavior, terminal restore
+   behavior.
 
 ## No-go policy
 

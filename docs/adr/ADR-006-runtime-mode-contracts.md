@@ -4,6 +4,7 @@
 **Status:** Accepted  
 **Deciders:** Core maintainer  
 **Related tasks:** `TASKS/REF-02-runtime-mode-contract.md`, `TASKS/REF-03-tui-mode-implement.md`, `TASKS/REF-04-runtime-context-start-turn.md`, `TASKS/REF-05-runtime-loop.md`, `TASKS/REF-06-tui-frontend-adapter.md`  
+**Amendment:** 2026-02-19 signature sections synchronized with accepted ADR-008 typed poll/interrupt contracts (`UserInputEvent`, `on_interrupt`)  
 **Supersedes:** Nothing. Extends `ADR-004` with concrete type contracts.
 
 ---
@@ -42,6 +43,10 @@ pub trait RuntimeMode {
 
     /// Called for every update emitted by the model/tool layer.
     fn on_model_update(&mut self, update: UiUpdate, ctx: &mut RuntimeContext);
+
+    /// Called when the frontend emits an interrupt event.
+    /// Default is a no-op so non-interrupting modes can opt out.
+    fn on_interrupt(&mut self, _ctx: &mut RuntimeContext) {}
 
     /// Frontends poll this to guard input submission (e.g. disable Enter while streaming).
     fn is_turn_in_progress(&self) -> bool;
@@ -138,9 +143,14 @@ pub enum RuntimeEvent {
 Located in `src/runtime/frontend.rs`. Decouples raw I/O from the runtime loop.
 
 ```rust
-pub trait FrontendAdapter {
-    fn poll_user_input(&mut self) -> Option<String>;
-    fn render<M: RuntimeMode>(&mut self, mode: &M);
+pub enum UserInputEvent {
+    Text(String),
+    Interrupt,
+}
+
+pub trait FrontendAdapter<M: RuntimeMode> {
+    fn poll_user_input(&mut self, mode: &M) -> Option<UserInputEvent>;
+    fn render(&mut self, mode: &M);
     fn should_quit(&self) -> bool;
 }
 ```
@@ -159,10 +169,12 @@ pub struct Runtime<M: RuntimeMode> {
 ```
 
 The `run()` method (REF-05) implements the generic loop:
-1. Poll the `FrontendAdapter` for user input → `mode.on_user_input(...)`.
-2. Drain `update_rx` → `mode.on_model_update(...)`.
-3. Ask the `FrontendAdapter` to render.
-4. Repeat until `frontend.should_quit()`.
+1. Poll the `FrontendAdapter` for typed user input.
+2. Route `UserInputEvent::Text(...)` to `mode.on_user_input(...)`.
+3. Route `UserInputEvent::Interrupt` to `mode.on_interrupt(...)`.
+4. Drain `update_rx` → `mode.on_model_update(...)`.
+5. Ask the `FrontendAdapter` to render.
+6. Repeat until `frontend.should_quit()`.
 
 ---
 
@@ -240,5 +252,5 @@ to depend on runtime-layer update signaling.
 1. Do not implement `run()` on `Runtime<M>` until REF-05. The stub in `loop.rs` is intentional.
 2. Do not move the `ratatui` draw loop out of `App` until REF-06. That is REF-06's job.
 3. Do not add CLI flags, environment variables, or new tool definitions during the REF track.
-4. `cargo test --all` must pass after every task. Anchor tests from completed tasks must stay green.
+4. `cargo test --all-targets` must pass after every task. Anchor tests from completed tasks must stay green.
 5. The only files in scope per task are listed in that task's manifest. Do not edit adjacent files to make a test compile.

@@ -1,6 +1,6 @@
 # TASK: REF-08 — Full Runtime-Core Cutover
 
-**Status:** Completed (merged to `main` on 2026-02-19)  
+**Status:** Completed (merged to `main` on 2026-02-19; PR-13 guardrail commit `0e83eef` included in merged history)  
 **Track:** REF (Refactor)  
 **Depends on:** REF-07  
 **Blocks:** none (final REF-track task)  
@@ -29,7 +29,8 @@ Before REF-08, `App` still owned an alternate dispatch path (`message_tx` /
    `RuntimeMode::on_user_input` -> `RuntimeContext::start_turn`.
 2. Alternate app routing removed:
    no `message_tx`/`message_rx` worker and no production `send_message` call
-   site outside runtime context.
+   site outside runtime context; no alternate message routing path remains
+   outside `RuntimeContext::start_turn`.
 3. Runtime protocol parity and safety hardening landed:
    REF-08 deltas A-F are implemented and documented.
 4. Layering/contract enforcement added to CI:
@@ -45,6 +46,9 @@ Validated gates for REF-08 completion:
 1. `cargo test --all-targets`
 2. `bash scripts/check_no_alternate_routing.sh`
 3. `bash scripts/check_forbidden_imports.sh`
+
+Post-merge confirmation on `main` (including PR-13 commit `0e83eef`) keeps the
+same no-alternate-routing guarantees green via checks #2 and #3.
 
 ## Delta Archive
 
