@@ -14,8 +14,9 @@ use futures::StreamExt;
 use std::collections::BTreeSet;
 #[cfg(test)]
 use std::collections::HashMap;
+use std::sync::Arc;
 #[cfg(test)]
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 
@@ -62,7 +63,7 @@ struct HistoryLimits {
 }
 
 pub struct ConversationManager {
-    client: ApiClient,
+    client: Arc<ApiClient>,
     tool_executor: ToolExecutor,
     api_messages: Vec<ApiMessage>,
     current_turn_blocks: Vec<StreamBlock>,
@@ -74,7 +75,7 @@ pub struct ConversationManager {
 impl ConversationManager {
     pub fn new(client: ApiClient, executor: ToolExecutor) -> Self {
         Self {
-            client,
+            client: Arc::new(client),
             tool_executor: executor,
             api_messages: Vec::new(),
             current_turn_blocks: Vec::new(),
@@ -87,13 +88,28 @@ impl ConversationManager {
     #[cfg(test)]
     pub fn new_mock(client: ApiClient, tool_executor_responses: HashMap<String, String>) -> Self {
         Self {
-            client,
+            client: Arc::new(client),
             tool_executor: ToolExecutor::new(std::path::PathBuf::from("/tmp")), // Dummy executor
             api_messages: Vec::new(),
             current_turn_blocks: Vec::new(),
             read_file_history_cache: ReadFileSnapshotCache::default(),
             mock_tool_executor_responses: Some(Arc::new(Mutex::new(tool_executor_responses))),
         }
+    }
+
+    pub fn push_user_message(&mut self, input: String) {
+        self.api_messages.push(ApiMessage {
+            role: "user".to_string(),
+            content: Content::Text(input),
+        });
+    }
+
+    pub fn messages_for_api(&self) -> Vec<ApiMessage> {
+        self.api_messages.clone()
+    }
+
+    pub fn client(&self) -> Arc<ApiClient> {
+        Arc::clone(&self.client)
     }
 
     pub async fn send_message(

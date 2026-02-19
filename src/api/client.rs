@@ -88,6 +88,15 @@ impl ApiClient {
         self
     }
 
+    pub async fn create_stream_with_cancel(
+        &self,
+        messages: &[ApiMessage],
+        token: tokio_util::sync::CancellationToken,
+    ) -> Result<ByteStream> {
+        let _ = token;
+        self.create_stream(messages).await
+    }
+
     pub async fn create_stream(&self, messages: &[ApiMessage]) -> Result<ByteStream> {
         #[cfg(test)]
         {

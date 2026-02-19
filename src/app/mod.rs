@@ -1165,9 +1165,12 @@ impl App {
         let (update_tx, update_rx) = mpsc::unbounded_channel();
         let (message_tx, mut message_rx) = mpsc::unbounded_channel();
 
-        let client = crate::api::ApiClient::new(&config)?;
+        let client = Arc::new(crate::api::ApiClient::new(&config)?);
         let executor = crate::tools::ToolExecutor::new(config.working_dir.clone());
-        let conversation = Arc::new(Mutex::new(ConversationManager::new(client, executor)));
+        let conversation = Arc::new(Mutex::new(ConversationManager::new(
+            (*client).clone(),
+            executor,
+        )));
 
         let conv_clone = Arc::clone(&conversation);
         task::spawn(async move {
