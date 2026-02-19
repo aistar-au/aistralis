@@ -24,29 +24,46 @@ struct PendingApproval {
     response_tx: tokio::sync::oneshot::Sender<bool>,
 }
 
-pub struct TuiMode {
-    history: Vec<String>,
-    pending_approval: Option<PendingApproval>,
-    auto_approve_session: bool,
+#[derive(Default)]
+struct HistoryState {
+    lines: Vec<String>,
     turn_in_progress: bool,
     active_assistant_index: Option<usize>,
+}
+
+#[derive(Default)]
+struct OverlayState {
+    pending_approval: Option<PendingApproval>,
+    auto_approve_session: bool,
+}
+
+#[derive(Default)]
+struct InputState {
+    buffer: String,
+    cursor: usize,
+    history: Vec<String>,
+    history_index: Option<usize>,
+    undo_stack: Vec<EditorSnapshot>,
+    redo_stack: Vec<EditorSnapshot>,
+}
+
+pub struct TuiMode {
+    history_state: HistoryState,
+    overlay_state: OverlayState,
 }
 
 impl TuiMode {
     pub fn new() -> Self {
         Self {
-            history: Vec::new(),
-            pending_approval: None,
-            auto_approve_session: false,
-            turn_in_progress: false,
-            active_assistant_index: None,
+            history_state: HistoryState::default(),
+            overlay_state: OverlayState::default(),
         }
     }
 
     fn status(&self) -> &'static str {
-        if self.pending_approval.is_some() {
+        if self.overlay_state.pending_approval.is_some() {
             "awaiting tool approval (1/y, 2/a, 3/n/esc)"
-        } else if self.turn_in_progress {
+        } else if self.history_state.turn_in_progress {
             "assistant is responding"
         } else {
             "ready"
@@ -54,11 +71,11 @@ impl TuiMode {
     }
 
     fn overlay_active(&self) -> bool {
-        self.pending_approval.is_some()
+        self.overlay_state.pending_approval.is_some()
     }
 
     fn resolve_pending_approval(&mut self, approved: bool) {
-        if let Some(pending) = self.pending_approval.take() {
+        if let Some(pending) = self.overlay_state.pending_approval.take() {
             let _ = pending.response_tx.send(approved);
         }
     }
@@ -66,29 +83,34 @@ impl TuiMode {
     fn handle_approval_input(&mut self, input: &str) {
         let normalized = input.trim().to_lowercase();
         let context = self
+            .overlay_state
             .pending_approval
             .as_ref()
             .map(|p| format!("{} {}", p.tool_name, p.input_preview))
             .unwrap_or_else(|| "unknown".to_string());
         match normalized.as_str() {
             "1" | "y" | "yes" => {
-                self.history
+                self.history_state
+                    .lines
                     .push(format!("[tool approval accepted once: {context}]"));
                 self.resolve_pending_approval(true);
             }
             "2" | "a" | "always" => {
-                self.auto_approve_session = true;
-                self.history
+                self.overlay_state.auto_approve_session = true;
+                self.history_state
+                    .lines
                     .push(format!("[tool approval enabled for session: {context}]"));
                 self.resolve_pending_approval(true);
             }
             "3" | "n" | "no" | "esc" => {
-                self.history
+                self.history_state
+                    .lines
                     .push(format!("[tool approval denied: {context}]"));
                 self.resolve_pending_approval(false);
             }
             _ => {
-                self.history
+                self.history_state
+                    .lines
                     .push("[invalid selection, expected 1/2/3]".to_string());
             }
         }
@@ -108,30 +130,30 @@ impl RuntimeMode for TuiMode {
             return;
         }
 
-        if self.turn_in_progress {
+        if self.history_state.turn_in_progress {
             return;
         }
 
-        self.history.push(format!("> {input}"));
-        self.history.push(String::new());
-        self.active_assistant_index = Some(self.history.len() - 1);
-        self.turn_in_progress = true;
+        self.history_state.lines.push(format!("> {input}"));
+        self.history_state.lines.push(String::new());
+        self.history_state.active_assistant_index = Some(self.history_state.lines.len() - 1);
+        self.history_state.turn_in_progress = true;
         ctx.start_turn(input);
     }
 
     fn on_model_update(&mut self, update: UiUpdate, _ctx: &mut RuntimeContext) {
         match update {
             UiUpdate::StreamDelta(text) => {
-                let idx = match self.active_assistant_index {
+                let idx = match self.history_state.active_assistant_index {
                     Some(idx) => idx,
                     None => {
-                        self.history.push(String::new());
-                        let idx = self.history.len() - 1;
-                        self.active_assistant_index = Some(idx);
+                        self.history_state.lines.push(String::new());
+                        let idx = self.history_state.lines.len() - 1;
+                        self.history_state.active_assistant_index = Some(idx);
                         idx
                     }
                 };
-                if let Some(line) = self.history.get_mut(idx) {
+                if let Some(line) = self.history_state.lines.get_mut(idx) {
                     line.push_str(&text);
                 }
             }
@@ -143,18 +165,19 @@ impl RuntimeMode for TuiMode {
                 input_preview,
                 response_tx,
             }) => {
-                if self.auto_approve_session {
+                if self.overlay_state.auto_approve_session {
                     let _ = response_tx.send(true);
-                    self.history
+                    self.history_state
+                        .lines
                         .push(format!("[auto-approved tool: {tool_name} session]"));
                     return;
                 }
 
                 self.resolve_pending_approval(false);
-                self.history.push(format!(
+                self.history_state.lines.push(format!(
                     "[tool approval requested: {tool_name}] {input_preview}"
                 ));
-                self.pending_approval = Some(PendingApproval {
+                self.overlay_state.pending_approval = Some(PendingApproval {
                     tool_name,
                     input_preview,
                     response_tx,
@@ -162,30 +185,32 @@ impl RuntimeMode for TuiMode {
             }
             UiUpdate::TurnComplete => {
                 self.resolve_pending_approval(false);
-                self.turn_in_progress = false;
-                self.active_assistant_index = None;
+                self.history_state.turn_in_progress = false;
+                self.history_state.active_assistant_index = None;
             }
             UiUpdate::Error(msg) => {
                 self.resolve_pending_approval(false);
-                self.history.push(format!("[error] {msg}"));
-                self.turn_in_progress = false;
-                self.active_assistant_index = None;
+                self.history_state.lines.push(format!("[error] {msg}"));
+                self.history_state.turn_in_progress = false;
+                self.history_state.active_assistant_index = None;
             }
         }
     }
 
     fn on_interrupt(&mut self, ctx: &mut RuntimeContext) {
-        if self.turn_in_progress {
+        if self.history_state.turn_in_progress {
             ctx.cancel_turn();
             self.resolve_pending_approval(false);
-            self.turn_in_progress = false;
-            self.active_assistant_index = None;
-            self.history.push("[turn cancelled]".to_string());
+            self.history_state.turn_in_progress = false;
+            self.history_state.active_assistant_index = None;
+            self.history_state
+                .lines
+                .push("[turn cancelled]".to_string());
         }
     }
 
     fn is_turn_in_progress(&self) -> bool {
-        self.turn_in_progress
+        self.history_state.turn_in_progress
     }
 }
 
@@ -196,12 +221,7 @@ struct EditorSnapshot {
 }
 
 struct InputEditor {
-    buffer: String,
-    cursor: usize,
-    history: Vec<String>,
-    history_index: Option<usize>,
-    undo_stack: Vec<EditorSnapshot>,
-    redo_stack: Vec<EditorSnapshot>,
+    input_state: InputState,
 }
 
 enum InputAction {
@@ -214,18 +234,13 @@ enum InputAction {
 impl InputEditor {
     fn new() -> Self {
         Self {
-            buffer: String::new(),
-            cursor: 0,
-            history: Vec::new(),
-            history_index: None,
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
+            input_state: InputState::default(),
         }
     }
 
     fn clamp_cursor_to_boundary_left(&self, mut idx: usize) -> usize {
-        idx = idx.min(self.buffer.len());
-        while idx > 0 && !self.buffer.is_char_boundary(idx) {
+        idx = idx.min(self.input_state.buffer.len());
+        while idx > 0 && !self.input_state.buffer.is_char_boundary(idx) {
             idx -= 1;
         }
         idx
@@ -237,7 +252,7 @@ impl InputEditor {
             return 0;
         }
         let mut j = i - 1;
-        while j > 0 && !self.buffer.is_char_boundary(j) {
+        while j > 0 && !self.input_state.buffer.is_char_boundary(j) {
             j -= 1;
         }
         j
@@ -245,116 +260,118 @@ impl InputEditor {
 
     fn next_char_boundary(&self, idx: usize) -> usize {
         let i = self.clamp_cursor_to_boundary_left(idx);
-        if i >= self.buffer.len() {
-            return self.buffer.len();
+        if i >= self.input_state.buffer.len() {
+            return self.input_state.buffer.len();
         }
-        match self.buffer[i..].chars().next() {
+        match self.input_state.buffer[i..].chars().next() {
             Some(ch) => i + ch.len_utf8(),
-            None => self.buffer.len(),
+            None => self.input_state.buffer.len(),
         }
     }
 
     fn snapshot(&self) -> EditorSnapshot {
         EditorSnapshot {
-            buffer: self.buffer.clone(),
-            cursor: self.cursor,
+            buffer: self.input_state.buffer.clone(),
+            cursor: self.input_state.cursor,
         }
     }
 
     fn push_undo(&mut self) {
-        self.undo_stack.push(self.snapshot());
-        self.redo_stack.clear();
+        self.input_state.undo_stack.push(self.snapshot());
+        self.input_state.redo_stack.clear();
     }
 
     fn restore(&mut self, snap: EditorSnapshot) {
-        self.buffer = snap.buffer;
-        self.cursor = self.clamp_cursor_to_boundary_left(snap.cursor);
+        self.input_state.buffer = snap.buffer;
+        self.input_state.cursor = self.clamp_cursor_to_boundary_left(snap.cursor);
     }
 
     fn insert_str(&mut self, value: &str) {
-        let cursor = self.clamp_cursor_to_boundary_left(self.cursor);
+        let cursor = self.clamp_cursor_to_boundary_left(self.input_state.cursor);
         self.push_undo();
-        self.buffer.insert_str(cursor, value);
-        self.cursor = cursor + value.len();
+        self.input_state.buffer.insert_str(cursor, value);
+        self.input_state.cursor = cursor + value.len();
     }
 
     fn backspace(&mut self) {
-        let end = self.clamp_cursor_to_boundary_left(self.cursor);
+        let end = self.clamp_cursor_to_boundary_left(self.input_state.cursor);
         if end == 0 {
             return;
         }
         let start = self.prev_char_boundary(end);
         self.push_undo();
-        self.buffer.replace_range(start..end, "");
-        self.cursor = start;
+        self.input_state.buffer.replace_range(start..end, "");
+        self.input_state.cursor = start;
     }
 
     fn delete(&mut self) {
-        let start = self.clamp_cursor_to_boundary_left(self.cursor);
-        if start >= self.buffer.len() {
+        let start = self.clamp_cursor_to_boundary_left(self.input_state.cursor);
+        if start >= self.input_state.buffer.len() {
             return;
         }
         let end = self.next_char_boundary(start);
         self.push_undo();
-        self.buffer.replace_range(start..end, "");
-        self.cursor = start;
+        self.input_state.buffer.replace_range(start..end, "");
+        self.input_state.cursor = start;
     }
 
     fn submit(&mut self) -> Option<String> {
-        let value = self.buffer.trim().to_string();
+        let value = self.input_state.buffer.trim().to_string();
         if value.is_empty() {
             return None;
         }
-        self.history.push(self.buffer.clone());
-        self.history_index = None;
+        self.input_state
+            .history
+            .push(self.input_state.buffer.clone());
+        self.input_state.history_index = None;
         self.push_undo();
-        self.buffer.clear();
-        self.cursor = 0;
+        self.input_state.buffer.clear();
+        self.input_state.cursor = 0;
         Some(value)
     }
 
     fn history_up(&mut self) {
-        if self.history.is_empty() {
+        if self.input_state.history.is_empty() {
             return;
         }
 
-        let next_index = match self.history_index {
+        let next_index = match self.input_state.history_index {
             Some(idx) if idx > 0 => idx - 1,
             Some(_) => 0,
-            None => self.history.len().saturating_sub(1),
+            None => self.input_state.history.len().saturating_sub(1),
         };
-        self.history_index = Some(next_index);
-        self.buffer = self.history[next_index].clone();
-        self.cursor = self.buffer.len();
+        self.input_state.history_index = Some(next_index);
+        self.input_state.buffer = self.input_state.history[next_index].clone();
+        self.input_state.cursor = self.input_state.buffer.len();
     }
 
     fn history_down(&mut self) {
-        let Some(idx) = self.history_index else {
+        let Some(idx) = self.input_state.history_index else {
             return;
         };
 
-        if idx + 1 >= self.history.len() {
-            self.history_index = None;
-            self.buffer.clear();
-            self.cursor = 0;
+        if idx + 1 >= self.input_state.history.len() {
+            self.input_state.history_index = None;
+            self.input_state.buffer.clear();
+            self.input_state.cursor = 0;
         } else {
             let next = idx + 1;
-            self.history_index = Some(next);
-            self.buffer = self.history[next].clone();
-            self.cursor = self.buffer.len();
+            self.input_state.history_index = Some(next);
+            self.input_state.buffer = self.input_state.history[next].clone();
+            self.input_state.cursor = self.input_state.buffer.len();
         }
     }
 
     fn undo(&mut self) {
-        if let Some(previous) = self.undo_stack.pop() {
-            self.redo_stack.push(self.snapshot());
+        if let Some(previous) = self.input_state.undo_stack.pop() {
+            self.input_state.redo_stack.push(self.snapshot());
             self.restore(previous);
         }
     }
 
     fn redo(&mut self) {
-        if let Some(next) = self.redo_stack.pop() {
-            self.undo_stack.push(self.snapshot());
+        if let Some(next) = self.input_state.redo_stack.pop() {
+            self.input_state.undo_stack.push(self.snapshot());
             self.restore(next);
         }
     }
@@ -373,7 +390,7 @@ impl InputEditor {
     fn apply_key(&mut self, key: KeyEvent) -> InputAction {
         match key.code {
             KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if self.buffer.is_empty() {
+                if self.input_state.buffer.is_empty() {
                     return InputAction::Quit;
                 }
             }
@@ -400,18 +417,18 @@ impl InputEditor {
             KeyCode::Backspace => self.backspace(),
             KeyCode::Delete => self.delete(),
             KeyCode::Left => {
-                self.cursor = self.prev_char_boundary(self.cursor);
+                self.input_state.cursor = self.prev_char_boundary(self.input_state.cursor);
             }
             KeyCode::Right => {
-                self.cursor = self.next_char_boundary(self.cursor);
+                self.input_state.cursor = self.next_char_boundary(self.input_state.cursor);
             }
-            KeyCode::Home => self.cursor = 0,
-            KeyCode::End => self.cursor = self.buffer.len(),
+            KeyCode::Home => self.input_state.cursor = 0,
+            KeyCode::End => self.input_state.cursor = self.input_state.buffer.len(),
             KeyCode::Up => self.history_up(),
             KeyCode::Down => self.history_down(),
             KeyCode::Char(ch) => self.insert_str(&ch.to_string()),
             KeyCode::Esc => {
-                if self.buffer.is_empty() {
+                if self.input_state.buffer.is_empty() {
                     return InputAction::Submit("esc".to_string());
                 }
             }
@@ -455,8 +472,9 @@ impl FrontendAdapter<TuiMode> for TuiFrontend {
 
     fn render(&mut self, mode: &TuiMode) {
         let _ = self.terminal.draw(|frame| {
-            let input_rows = input_visual_rows(&self.editor.buffer, frame.area().width as usize)
-                .clamp(1, 6) as u16;
+            let input_rows =
+                input_visual_rows(&self.editor.input_state.buffer, frame.area().width as usize)
+                    .clamp(1, 6) as u16;
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
@@ -466,9 +484,14 @@ impl FrontendAdapter<TuiMode> for TuiFrontend {
                 ])
                 .split(frame.area());
 
-            render_messages(frame, chunks[0], &mode.history, 0);
+            render_messages(frame, chunks[0], &mode.history_state.lines, 0);
             render_status_line(frame, chunks[1], mode.status());
-            render_input(frame, chunks[2], &self.editor.buffer, self.editor.cursor);
+            render_input(
+                frame,
+                chunks[2],
+                &self.editor.input_state.buffer,
+                self.editor.input_state.cursor,
+            );
         });
     }
 
@@ -550,7 +573,10 @@ mod tests {
         );
 
         mode.on_user_input("blocked".to_string(), &mut ctx);
-        assert!(!mode.turn_in_progress, "overlay must block input dispatch");
+        assert!(
+            !mode.history_state.turn_in_progress,
+            "overlay must block input dispatch"
+        );
 
         mode.on_user_input("1".to_string(), &mut ctx);
         assert!(
@@ -560,7 +586,7 @@ mod tests {
 
         mode.on_user_input("resume".to_string(), &mut ctx);
         assert!(
-            mode.turn_in_progress,
+            mode.history_state.turn_in_progress,
             "dispatch should resume after overlay clears"
         );
     }
@@ -572,8 +598,8 @@ mod tests {
         mode.on_user_input("hello".to_string(), &mut ctx);
         mode.on_model_update(UiUpdate::StreamDelta("assistant".to_string()), &mut ctx);
 
-        assert_eq!(mode.history[0], "> hello");
-        assert_eq!(mode.history[1], "assistant");
+        assert_eq!(mode.history_state.lines[0], "> hello");
+        assert_eq!(mode.history_state.lines[1], "assistant");
     }
 
     #[test]
@@ -585,23 +611,23 @@ mod tests {
         editor.apply_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
         editor.apply_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
         editor.apply_key(KeyEvent::new(KeyCode::Char('X'), KeyModifiers::NONE));
-        assert_eq!(editor.buffer, "aXbc");
+        assert_eq!(editor.input_state.buffer, "aXbc");
     }
 
     #[test]
     fn test_editor_history_up_down() {
         let mut editor = InputEditor::new();
-        editor.buffer = "first".to_string();
+        editor.input_state.buffer = "first".to_string();
         let _ = editor.submit();
-        editor.buffer = "second".to_string();
+        editor.input_state.buffer = "second".to_string();
         let _ = editor.submit();
 
         editor.apply_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
-        assert_eq!(editor.buffer, "second");
+        assert_eq!(editor.input_state.buffer, "second");
         editor.apply_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
-        assert_eq!(editor.buffer, "first");
+        assert_eq!(editor.input_state.buffer, "first");
         editor.apply_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-        assert_eq!(editor.buffer, "second");
+        assert_eq!(editor.input_state.buffer, "second");
     }
 
     #[test]
@@ -612,7 +638,7 @@ mod tests {
         editor.apply_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE));
         editor.apply_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL));
         editor.apply_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
-        assert_eq!(editor.buffer, "a\nb\nc");
+        assert_eq!(editor.input_state.buffer, "a\nb\nc");
     }
 
     #[test]
@@ -621,32 +647,32 @@ mod tests {
         editor.apply_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
         editor.apply_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE));
         editor.apply_key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL));
-        assert_eq!(editor.buffer, "a");
+        assert_eq!(editor.input_state.buffer, "a");
         editor.apply_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL));
-        assert_eq!(editor.buffer, "ab");
+        assert_eq!(editor.input_state.buffer, "ab");
     }
 
     #[test]
     fn test_editor_paste_handling() {
         let mut editor = InputEditor::new();
         let _ = editor.apply_event(Event::Paste("hello".to_string()));
-        assert_eq!(editor.buffer, "hello");
+        assert_eq!(editor.input_state.buffer, "hello");
     }
 
     #[test]
     fn test_input_editor_unicode_cursor_backspace_delete_safe() {
         let mut editor = InputEditor::new();
         editor.insert_str("a😀b");
-        editor.cursor = editor.buffer.len();
+        editor.input_state.cursor = editor.input_state.buffer.len();
         editor.backspace();
-        assert_eq!(editor.buffer, "a😀");
+        assert_eq!(editor.input_state.buffer, "a😀");
         editor.backspace();
-        assert_eq!(editor.buffer, "a");
+        assert_eq!(editor.input_state.buffer, "a");
 
         editor.insert_str("😀b");
-        editor.cursor = 2; // intentionally non-boundary (inside 😀 codepoint)
+        editor.input_state.cursor = 2; // intentionally non-boundary (inside 😀 codepoint)
         editor.delete();
-        assert_eq!(editor.buffer, "ab");
+        assert_eq!(editor.input_state.buffer, "ab");
     }
 
     #[tokio::test]
@@ -670,7 +696,8 @@ mod tests {
             "overlay should stay active on invalid input"
         );
         assert!(
-            mode.history
+            mode.history_state
+                .lines
                 .iter()
                 .any(|line| line.contains("[invalid selection, expected 1/2/3]")),
             "expected invalid selection feedback line"
@@ -684,13 +711,13 @@ mod tests {
 
         mode.on_user_input("__AISTAR_INTERRUPT__".to_string(), &mut ctx);
         assert!(
-            mode.turn_in_progress,
+            mode.history_state.turn_in_progress,
             "plain text matching old sentinel must be treated as normal user input"
         );
 
         mode.on_interrupt(&mut ctx);
         assert!(
-            !mode.turn_in_progress,
+            !mode.history_state.turn_in_progress,
             "typed interrupt should cancel active turn"
         );
     }
