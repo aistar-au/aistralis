@@ -10,3 +10,6 @@ pub mod tools;
 pub mod types;
 pub mod ui;
 pub mod util;
+
+#[cfg(test)]
+pub mod test_support;

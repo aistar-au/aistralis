@@ -260,8 +260,11 @@ mod tests {
             "exactly one TurnComplete"
         );
     }
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_ref_08_tool_approval_forwarding_no_hang() {
+        let _env_lock = crate::test_support::ENV_LOCK
+            .lock()
+            .expect("env lock poisoned");
         std::env::set_var("AISTAR_TOOL_CONFIRM", "true");
         let first_response_sse = vec![
             r#"event: message_start
@@ -412,8 +415,13 @@ data: {"type":"message_stop"}"#.to_string(),
 
     #[tokio::test]
     async fn test_ref_08_cancel_turn_resets_root_token_for_next_turn() {
-        let (tx, _rx) = mpsc::unbounded_channel::<UiUpdate>();
-        let client = ApiClient::new_mock(Arc::new(MockApiClient::new(vec![vec![]])));
+        let (tx, mut rx) = mpsc::unbounded_channel::<UiUpdate>();
+        let client = ApiClient::new_mock(Arc::new(MockApiClient::new(vec![vec![
+            "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n".to_string(),
+            "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n\n".to_string(),
+            "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n".to_string(),
+            "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n".to_string(),
+        ]])));
         let conversation = ConversationManager::new_mock(client, HashMap::new());
         let mut ctx = RuntimeContext::new(conversation, tx, CancellationToken::new());
 
@@ -424,10 +432,23 @@ data: {"type":"message_stop"}"#.to_string(),
             "cancel_turn must replace root token with a fresh non-cancelled token"
         );
 
-        ctx.start_turn("next".to_string());
+        ctx.start_turn("turn B".to_string());
+
+        let progressed = tokio::time::timeout(Duration::from_millis(800), async {
+            loop {
+                match rx.recv().await {
+                    Some(UiUpdate::StreamDelta(_) | UiUpdate::TurnComplete) => return true,
+                    Some(UiUpdate::Error(_)) | None => return false,
+                    Some(_) => {}
+                }
+            }
+        })
+        .await
+        .unwrap_or(false);
+
         assert!(
-            !ctx.test_root_cancelled(),
-            "starting next turn should use fresh root token and not stay poisoned"
+            progressed,
+            "turn after cancel_turn must emit at least one normal update with fresh root token"
         );
     }
 
