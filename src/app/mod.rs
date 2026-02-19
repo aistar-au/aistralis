@@ -108,8 +108,7 @@ impl RuntimeMode for TuiMode {
         }
 
         self.turn_in_progress = true;
-        let _ = input;
-        let _ = ctx;
+        ctx.start_turn(input);
     }
 
     fn on_model_update(&mut self, update: UiUpdate, _ctx: &mut RuntimeContext) {
@@ -3466,10 +3465,20 @@ fn prompt_area_safe_width(cols: u16) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::{mock_client::MockApiClient, ApiClient};
+    use std::collections::HashMap;
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    fn dummy_ctx<'a>(conversation: &'a mut ConversationManager) -> RuntimeContext<'a> {
-        RuntimeContext { conversation }
+    fn dummy_ctx() -> RuntimeContext {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let client = ApiClient::new_mock(Arc::new(MockApiClient::new(vec![])));
+        let conversation = ConversationManager::new_mock(client, HashMap::new());
+        RuntimeContext::new(
+            conversation,
+            tx,
+            tokio_util::sync::CancellationToken::new(),
+        )
     }
 
     #[tokio::test]
@@ -4022,16 +4031,11 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_ref_03_tui_mode_overlay_blocks_input() {
-        use crate::api::{mock_client::MockApiClient, ApiClient};
+    #[tokio::test]
+    async fn test_ref_03_tui_mode_overlay_blocks_input() {
         use crate::runtime::mode::RuntimeMode;
-        use std::collections::HashMap;
-        use std::sync::Arc;
 
-        let mock_api_client = ApiClient::new_mock(Arc::new(MockApiClient::new(vec![])));
-        let mut conversation = ConversationManager::new_mock(mock_api_client, HashMap::new());
-        let mut ctx = dummy_ctx(&mut conversation);
+        let mut ctx = dummy_ctx();
 
         let mut mode = TuiMode::new();
         assert!(!mode.is_turn_in_progress());

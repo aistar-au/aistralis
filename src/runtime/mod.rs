@@ -78,7 +78,7 @@ mod tests {
         }
 
         let _ = std::mem::size_of::<RuntimeEvent>();
-        let _ = std::mem::size_of::<Option<RuntimeContext<'static>>>();
+        let _ = std::mem::size_of::<Option<RuntimeContext>>();
         let _ = _uses_runtime_mode_trait::<DummyMode>;
         let _ = _uses_frontend_adapter_trait::<DummyFrontend>;
     }
