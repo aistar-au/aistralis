@@ -38,7 +38,7 @@ In `TuiMode::on_user_input`, replace the silent early return with visible reject
 ```rust
 if self.turn_in_progress {
     // ADR-012 gate #1: no silent drop. Reject with visible feedback.
-    self.history.messages.push(
+    self.history.push(
         "[busy — turn in progress, input discarded]".to_string()
     );
     return;
@@ -52,43 +52,43 @@ user-visible.
 
 ### Fix 2 — Idle interrupt double-press exit
 
-Add `pending_quit: bool` to `TuiMode` (or `InputState` after CORE-09).
-Initialize to `false`.
+Add two fields to `TuiMode` (or `InputState` after CORE-09):
+
+```rust
+pending_quit: bool,
+quit_requested: bool,
+```
+
+Initialize both to `false`.
 
 In `TuiMode::on_interrupt`:
 
 ```rust
 pub fn on_interrupt(&mut self, ctx: &mut RuntimeContext) {
     if self.turn_in_progress {
-        // Existing behavior: cancel active turn
         ctx.cancel_turn();
-        self.history.messages.push("[turn cancelled]".to_string());
-        // Clear the pending_quit flag — a successful cancel resets exit intent
+        self.history.push("[turn cancelled]".to_string());
         self.pending_quit = false;
+        self.quit_requested = false;
         return;
     }
 
-    // Idle path
     if self.pending_quit {
-        // Second Ctrl+C: exit
-        ctx.request_quit();   // or set a quit flag the loop checks
+        // Second idle Ctrl+C requests exit.
+        self.quit_requested = true;
     } else {
         self.pending_quit = true;
-        self.history.messages.push(
-            "[press Ctrl+C again to exit]".to_string()
-        );
+        self.history
+            .push("[press Ctrl+C again to exit]".to_string());
     }
 }
 ```
 
-`ctx.request_quit()` signals the `Runtime::run` loop to set `should_quit = true`
-on the `FrontendAdapter`. If `RuntimeContext` does not yet have a quit signal,
-add a boolean field `quit_requested: bool` and expose
-`pub fn request_quit(&mut self) { self.quit_requested = true; }`.
-The `TuiFrontend::should_quit` implementation reads this flag.
+Then, in `TuiFrontend::poll_user_input(&mut self, mode: &TuiMode)`, set
+`self.quit = true` when `mode.quit_requested` is true.
 
-`pending_quit` MUST be reset to `false` when a new turn starts (in `on_user_input`
-after the guard passes), so a brief idle `Ctrl+C` during a session does not linger.
+`pending_quit` MUST reset to `false` when a new turn starts (after the busy/overlay
+guards pass), so idle Ctrl+C intent does not linger across accepted turns.
 
 ---
 
@@ -120,7 +120,7 @@ fn test_idle_interrupt_shows_feedback() {
     // Assert pending_quit == true
     // Assert history contains "[press Ctrl+C again to exit]"
     // Call on_interrupt again
-    // Assert should_quit is signalled (ctx.quit_requested == true or equivalent)
+    // Assert should_quit is signalled via mode/frontend quit path
 }
 
 #[test]

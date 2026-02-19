@@ -5,8 +5,8 @@
 **ADR:** ADR-013, ADR-011 §1–§2 (render loop efficiency), ADR-012 gate #6
 
 **Depends on:** CORE-08 (`overlay_renders_after_base_panes` must be green — render
-path must be stable before adding a guard to it), CORE-10 (state changes from overlay
-routing are the primary dirty trigger)
+path must be stable before adding a guard to it)
+**Can run in parallel with:** CORE-10
 
 ---
 

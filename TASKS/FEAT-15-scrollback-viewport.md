@@ -1,11 +1,11 @@
 # Task FEAT-15: Scrollback Viewport
 
-**Target Files:** `src/app/mod.rs`, `src/ui/render.rs`
+**Target File:** `src/app/mod.rs`
 
 **ADR:** ADR-013, ADR-010 (viewport and transcript model), ADR-012 gate #3
 
 **Depends on:** CORE-09 (`ui_state_slices_compile` must be green)
-**Parallel-safe with:** CORE-07 chain (no shared files until CORE-08 edits `src/ui/render.rs`)
+**Parallel-safe with:** CORE-07 and CORE-08 chains (history-state work in `src/app/mod.rs`)
 
 ---
 
@@ -28,11 +28,8 @@ ADR-012 gate #3 blocks deployment until this is implemented.
    scroll_offset: usize,
    auto_follow: bool,  // default: true
    ```
-2. Update `render_messages` signature:
-   ```rust
-   fn render_messages(history: &[String], scroll_offset: usize, auto_follow: bool, area: Rect, buf: &mut Buffer)
-   ```
-   Never call with hard-coded `0`. The caller always passes the live state values.
+2. In the render call path, pass live `scroll_offset` state to existing
+   `render_messages(...)`. Never call with hard-coded `0`.
 3. In `TuiFrontend::poll_user_input` (or the key dispatch path), handle:
    - `PageUp` → decrement `scroll_offset` by viewport height; set `auto_follow = false`
    - `PageDown` → increment `scroll_offset` (clamped to max); if at bottom, set `auto_follow = true`
@@ -46,8 +43,8 @@ ADR-012 gate #3 blocks deployment until this is implemented.
 
 ## Definition of Done
 
-1. `render_messages` accepts `scroll_offset: usize` and `auto_follow: bool` — no call
-   site passes a hard-coded `0`.
+1. The `render_messages(...)` call site uses live `scroll_offset` state; no call
+   site passes hard-coded `0`.
 2. PageUp/PageDown/Home/End key events update scroll state correctly.
 3. Auto-follow advances the viewport on new output when enabled.
 4. A scrolled-up viewport is not force-scrolled on new `StreamDelta` when
@@ -73,6 +70,7 @@ fn test_scrollback_retains_position_during_streaming() {
 
 **What NOT to do:**
 - Do not move render logic that belongs to CORE-08 (frame composition order).
+- Do not modify `src/ui/render.rs` for this task.
 - Do not add new `UiUpdate` variants.
 - Do not touch `src/state/`, `src/api/`, or `src/tools/`.
 - Do not add CLI flags or env vars.

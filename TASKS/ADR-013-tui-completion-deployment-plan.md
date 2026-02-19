@@ -89,23 +89,24 @@ CORE-11 require CORE-08. FEAT-10 through FEAT-14 require CORE-10 and CORE-11.
 
 ### Phase 2 — Runtime correctness and lifecycle
 
-New task manifests at `TASKS/CORE-12-*.md`, `TASKS/CORE-13-*.md`, `TASKS/CORE-14-*.md`,
-`TASKS/FEAT-15-*.md`, and `TASKS/FEAT-16-*.md`.
+New task manifests at `TASKS/CORE-12-*.md`, `TASKS/CORE-13-*.md`,
+`TASKS/FEAT-15-*.md`, and `TASKS/FEAT-16-*.md`, with CORE-14 archived at
+`TASKS/completed/CORE-14-panic-hook-terminal-restore.md`.
 
 | Task | Target files | ADR-012 gate | Anchor test |
 | :--- | :--- | :--- | :--- |
-| FEAT-15 | `src/app/mod.rs`, `src/ui/render.rs` | #3 scrollback | `scrollback_retains_position_during_streaming` |
+| FEAT-15 | `src/app/mod.rs` | #3 scrollback | `scrollback_retains_position_during_streaming` |
 | CORE-12 | `src/app/mod.rs` | #5 transcript retention | `transcript_does_not_exceed_cap_after_n_turns` |
 | CORE-13 | `src/app/mod.rs` | #6 render efficiency | `render_not_called_when_state_unchanged` |
-| CORE-14 | `src/app/mod.rs` or `src/main.rs` | #7 terminal lifecycle | `terminal_restored_after_simulated_panic` |
+| CORE-14 | `src/terminal/mod.rs`, `src/app/mod.rs` | #7 terminal lifecycle | `terminal_restored_after_simulated_panic` |
 | FEAT-16 | `src/app/mod.rs` | #1 + #2 | `idle_interrupt_shows_feedback`, `input_drop_shows_feedback` |
 
 **Dispatch order for Phase 2:** CORE-14 (panic hook) is independent and low-risk — it
 must be dispatched before any Phase 1 task because raw mode is already active and a
 panic during Phase 1 testing leaves the terminal broken without it. FEAT-15 and CORE-12
 are independent of the Phase 1 chain and may be dispatched in parallel with CORE-07
-once CORE-09 is green. CORE-13 and FEAT-16 require CORE-10 (dirty state and interrupt
-routing share the same `TuiMode` state machine).
+once CORE-09 is green. CORE-13 may run in parallel with CORE-10. FEAT-16 requires
+CORE-10 (shared interrupt/input routing path).
 
 ---
 
@@ -117,8 +118,8 @@ in code review and CI:
 1. **Overlay z-order:** `TuiFrontend::render` MUST draw the modal surface as the last
    draw call in every frame. No pane geometry may change due to overlay presence.
 
-2. **Scroll parameters:** `render_messages` MUST accept `scroll_offset: usize` and
-   `auto_follow: bool`. Callers MUST NOT hard-code `0`.
+2. **Scroll parameters:** `render_messages` callers MUST pass live
+   `scroll_offset` state from `TuiMode`/`HistoryState`; hard-coded `0` is forbidden.
 
 3. **History cap:** `TuiMode::history.len()` (or the equivalent `HistoryState`
    field after CORE-09) MUST NOT exceed `MAX_HISTORY_LINES` at the end of any
