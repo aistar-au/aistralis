@@ -1,0 +1,49 @@
+name: autofix
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  autofix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable Rust (with rustfmt)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Install Taplo (TOML formatter)
+        uses: uncenter/setup-taplo@v1
+        with:
+          version: "0.8.1"
+
+      # Fix Rust formatting
+      - name: Rustfmt (apply)
+        run: cargo fmt
+
+      # Fix TOML formatting (Cargo.toml + any others)
+      - name: Taplo fmt (apply)
+        run: taplo fmt
+
+      # Apply compiler suggestions where safe (no edition change)
+      - name: Cargo fix (apply)
+        run: cargo fix --allow-dirty --allow-staged
+
+      # Create a PR with the changes
+      - name: Create PR
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: "chore: autofix formatting"
+          title: "chore: autofix formatting"
+          body: |
+            Automated formatting fixes:
+            - cargo fmt
+            - taplo fmt
+            - cargo fix
+          branch: autofix/formatting
