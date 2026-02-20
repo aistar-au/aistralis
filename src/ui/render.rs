@@ -2,12 +2,29 @@ use crate::ui::input_metrics::{
     char_display_width, cursor_row_col, truncate_to_display_width, wrap_input_lines,
 };
 use ratatui::{
-    layout::{Alignment, Rect},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Text},
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
     Frame,
 };
+
+pub enum OverlayModal<'a> {
+    CommandConfirm {
+        command_preview: &'a str,
+    },
+    PatchApprove {
+        patch_preview: &'a str,
+    },
+    ToolPermission {
+        tool_name: &'a str,
+        input_preview: &'a str,
+        auto_approve_enabled: bool,
+    },
+    Error {
+        message: &'a str,
+    },
+}
 
 pub fn input_visual_rows(input: &str, width: usize) -> usize {
     wrap_input_lines(input, width).len().max(1)
@@ -86,53 +103,131 @@ pub fn render_status_line(frame: &mut Frame<'_>, area: Rect, status: &str) {
     );
 }
 
-pub fn render_tool_approval_modal(
-    frame: &mut Frame<'_>,
-    tool_name: &str,
-    input_preview: &str,
-    auto_approve_enabled: bool,
-) {
-    let size = frame.area();
-    let width = size.width.clamp(44, 96);
-    let height = size.height.clamp(10, 16);
-    let x = size.x + (size.width.saturating_sub(width)) / 2;
-    let y = size.y + (size.height.saturating_sub(height)) / 2;
-    let area = Rect::new(x, y, width, height);
+pub fn render_overlay_modal(frame: &mut Frame<'_>, modal: OverlayModal<'_>) {
+    if frame.area().width == 0 || frame.area().height == 0 {
+        return;
+    }
+
+    let (title, accent, body, shortcuts) = modal_content(modal);
+    let preferred_height = (body.len() + 8) as u16;
+    let area = centered_modal_area(frame.area(), preferred_height);
     frame.render_widget(Clear, area);
 
-    let block = Block::default()
+    let outer = Block::default()
         .borders(Borders::ALL)
-        .title(format!("Tool Approval: {tool_name}"))
-        .style(Style::default().fg(Color::Yellow));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+        .title(title)
+        .style(Style::default().fg(accent));
+    let inner = outer.inner(area);
+    frame.render_widget(outer, area);
 
-    let mut lines = Vec::new();
-    if auto_approve_enabled {
-        lines.push(Line::styled(
-            "session auto-approve is ON",
-            Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD),
-        ));
-    }
-    lines.push(Line::from("y/1 approve once   a/2 approve session"));
-    lines.push(Line::from("n/3/esc deny and cancel current turn"));
-    lines.push(Line::from(""));
-    lines.push(Line::styled(
-        "Preview",
-        Style::default().add_modifier(Modifier::BOLD),
-    ));
-    for line in input_preview.lines().take(4) {
-        lines.push(Line::from(line.to_string()));
-    }
+    let vertical = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(3), Constraint::Length(1)])
+        .split(inner);
+    let body_area = vertical[0];
+    let shortcuts_area = vertical[1];
+
+    let body_block = Block::default().borders(Borders::ALL).title("Body");
+    let body_inner = body_block.inner(body_area);
+    frame.render_widget(body_block, body_area);
 
     frame.render_widget(
-        Paragraph::new(Text::from(lines))
+        Paragraph::new(Text::from(body))
             .alignment(Alignment::Left)
             .wrap(Wrap { trim: false }),
-        inner,
+        body_inner,
     );
+
+    frame.render_widget(
+        Paragraph::new(shortcuts)
+            .alignment(Alignment::Center)
+            .style(Style::default().fg(Color::DarkGray)),
+        shortcuts_area,
+    );
+}
+
+fn modal_content(
+    modal: OverlayModal<'_>,
+) -> (&'static str, Color, Vec<Line<'static>>, &'static str) {
+    match modal {
+        OverlayModal::CommandConfirm { command_preview } => (
+            "Command Confirm",
+            Color::Cyan,
+            vec![
+                Line::from("Confirm command execution."),
+                Line::from(""),
+                Line::styled("Command", Style::default().add_modifier(Modifier::BOLD)),
+                Line::from(command_preview.to_string()),
+            ],
+            "y/1 confirm   n/3/esc cancel",
+        ),
+        OverlayModal::PatchApprove { patch_preview } => (
+            "Patch Approve",
+            Color::Blue,
+            vec![
+                Line::from("Review and approve patch application."),
+                Line::from(""),
+                Line::styled("Patch", Style::default().add_modifier(Modifier::BOLD)),
+                Line::from(patch_preview.to_string()),
+            ],
+            "y/1 approve   n/3/esc reject",
+        ),
+        OverlayModal::ToolPermission {
+            tool_name,
+            input_preview,
+            auto_approve_enabled,
+        } => {
+            let mut body = Vec::new();
+            body.push(Line::styled(
+                format!("Tool: {tool_name}"),
+                Style::default().add_modifier(Modifier::BOLD),
+            ));
+            if auto_approve_enabled {
+                body.push(Line::styled(
+                    "session auto-approve is ON",
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                ));
+            }
+            body.push(Line::from(""));
+            body.push(Line::styled(
+                "Preview",
+                Style::default().add_modifier(Modifier::BOLD),
+            ));
+            for line in input_preview.lines().take(6) {
+                body.push(Line::from(line.to_string()));
+            }
+            (
+                "Tool Permission",
+                Color::Yellow,
+                body,
+                "y/1 approve once   a/2 approve session   n/3/esc deny",
+            )
+        }
+        OverlayModal::Error { message } => (
+            "Error",
+            Color::Red,
+            vec![
+                Line::styled(
+                    "An error occurred.",
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+                Line::from(""),
+                Line::from(message.to_string()),
+            ],
+            "enter/esc dismiss",
+        ),
+    }
+}
+
+fn centered_modal_area(size: Rect, preferred_height: u16) -> Rect {
+    let width = size.width.clamp(44, 96);
+    let max_height = size.height.clamp(8, 24);
+    let height = preferred_height.clamp(8, max_height);
+    let x = size.x + (size.width.saturating_sub(width)) / 2;
+    let y = size.y + (size.height.saturating_sub(height)) / 2;
+    Rect::new(x, y, width, height)
 }
 
 fn truncate_line(input: &str, width: usize) -> String {
@@ -156,4 +251,39 @@ fn truncate_line(input: &str, width: usize) -> String {
         out.push_str("...");
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::{backend::TestBackend, Terminal};
+
+    #[test]
+    fn all_modals_use_unified_renderer() {
+        let backend = TestBackend::new(100, 30);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+
+        let modals = [
+            OverlayModal::CommandConfirm {
+                command_preview: "cargo test --all-targets",
+            },
+            OverlayModal::PatchApprove {
+                patch_preview: "diff --git a/src/app/mod.rs b/src/app/mod.rs",
+            },
+            OverlayModal::ToolPermission {
+                tool_name: "exec_command",
+                input_preview: "echo hi",
+                auto_approve_enabled: false,
+            },
+            OverlayModal::Error {
+                message: "permission denied",
+            },
+        ];
+
+        for modal in modals {
+            terminal
+                .draw(|frame| render_overlay_modal(frame, modal))
+                .expect("renderer should support every modal class");
+        }
+    }
 }

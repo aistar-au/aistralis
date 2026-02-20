@@ -9,8 +9,8 @@ use crate::state::{ConversationManager, ToolApprovalRequest};
 use crate::tools::ToolExecutor;
 use crate::ui::layout::split_three_pane_layout;
 use crate::ui::render::{
-    input_visual_rows, render_input, render_messages, render_status_line,
-    render_tool_approval_modal,
+    input_visual_rows, render_input, render_messages, render_overlay_modal, render_status_line,
+    OverlayModal,
 };
 use anyhow::Result;
 use crossterm::event::{poll, read, Event, KeyCode, KeyEvent, KeyModifiers};
@@ -819,11 +819,13 @@ fn draw_tui_frame(frame: &mut Frame<'_>, mode: &TuiMode, input_state: &InputStat
             }
             RenderPass::Overlay => {
                 if let Some(pending) = mode.overlay_state.pending_approval.as_ref() {
-                    render_tool_approval_modal(
+                    render_overlay_modal(
                         frame,
-                        &pending.tool_name,
-                        &pending.input_preview,
-                        mode.overlay_state.auto_approve_session,
+                        OverlayModal::ToolPermission {
+                            tool_name: &pending.tool_name,
+                            input_preview: &pending.input_preview,
+                            auto_approve_enabled: mode.overlay_state.auto_approve_session,
+                        },
                     );
                 }
             }
