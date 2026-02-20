@@ -262,7 +262,7 @@ mod tests {
     }
     #[tokio::test(flavor = "current_thread")]
     async fn test_ref_08_tool_approval_forwarding_no_hang() {
-        let _env_lock = crate::test_support::ASYNC_ENV_LOCK.lock().await;
+        let _env_lock = crate::test_support::ENV_LOCK.lock().await;
         std::env::set_var("AISTAR_TOOL_CONFIRM", "true");
         let first_response_sse = vec![
             r#"event: message_start

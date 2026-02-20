@@ -602,9 +602,7 @@ mod tests {
 
     #[test]
     fn test_structured_tool_protocol_env_off_disables_protocol() {
-        let _env_lock = crate::test_support::ENV_LOCK
-            .lock()
-            .expect("env lock poisoned");
+        let _env_lock = crate::test_support::ENV_LOCK.blocking_lock();
         std::env::set_var("AISTAR_STRUCTURED_TOOL_PROTOCOL", "off");
         let config = crate::config::Config {
             api_key: None,

@@ -8,7 +8,10 @@ use crate::runtime::UiUpdate;
 use crate::state::{ConversationManager, ToolApprovalRequest};
 use crate::tools::ToolExecutor;
 use crate::ui::layout::split_three_pane_layout;
-use crate::ui::render::{input_visual_rows, render_input, render_messages, render_status_line};
+use crate::ui::render::{
+    input_visual_rows, render_input, render_messages, render_status_line,
+    render_tool_approval_modal,
+};
 use anyhow::Result;
 use crossterm::event::{poll, read, Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{backend::CrosstermBackend, Frame, Terminal};
@@ -459,9 +462,43 @@ fn draw_tui_frame(frame: &mut Frame<'_>, mode: &TuiMode, input_state: &InputStat
         input_visual_rows(&input_state.buffer, frame.area().width as usize).clamp(1, 6) as u16;
     let panes = split_three_pane_layout(frame.area(), input_rows);
 
-    render_status_line(frame, panes.header, mode.status());
-    render_messages(frame, panes.history, &mode.history_state.lines, 0);
-    render_input(frame, panes.input, &input_state.buffer, input_state.cursor);
+    for pass in render_pass_order(mode) {
+        match pass {
+            RenderPass::Header => render_status_line(frame, panes.header, mode.status()),
+            RenderPass::History => {
+                render_messages(frame, panes.history, &mode.history_state.lines, 0)
+            }
+            RenderPass::Input => {
+                render_input(frame, panes.input, &input_state.buffer, input_state.cursor)
+            }
+            RenderPass::Overlay => {
+                if let Some(pending) = mode.overlay_state.pending_approval.as_ref() {
+                    render_tool_approval_modal(
+                        frame,
+                        &pending.tool_name,
+                        &pending.input_preview,
+                        mode.overlay_state.auto_approve_session,
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RenderPass {
+    Header,
+    History,
+    Input,
+    Overlay,
+}
+
+fn render_pass_order(mode: &TuiMode) -> Vec<RenderPass> {
+    let mut order = vec![RenderPass::Header, RenderPass::History, RenderPass::Input];
+    if mode.overlay_active() {
+        order.push(RenderPass::Overlay);
+    }
+    order
 }
 
 impl FrontendAdapter<TuiMode> for TuiFrontend {
@@ -591,6 +628,33 @@ mod tests {
 
         assert_eq!(mode.history_state.lines[0], "> hello");
         assert_eq!(mode.history_state.lines[1], "assistant");
+    }
+
+    #[test]
+    fn overlay_renders_after_base_panes() {
+        let mode = TuiMode::new();
+        assert_eq!(
+            render_pass_order(&mode),
+            vec![RenderPass::Header, RenderPass::History, RenderPass::Input]
+        );
+
+        let mut overlay_mode = TuiMode::new();
+        let (response_tx, _response_rx) = tokio::sync::oneshot::channel::<bool>();
+        overlay_mode.overlay_state.pending_approval = Some(PendingApproval {
+            tool_name: "read_file".to_string(),
+            input_preview: "{\"path\":\"Cargo.toml\"}".to_string(),
+            response_tx,
+        });
+        assert_eq!(
+            render_pass_order(&overlay_mode),
+            vec![
+                RenderPass::Header,
+                RenderPass::History,
+                RenderPass::Input,
+                RenderPass::Overlay,
+            ],
+            "overlay must always render last"
+        );
     }
 
     #[test]

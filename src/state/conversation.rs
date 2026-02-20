@@ -1690,9 +1690,7 @@ cal.js
 
     #[test]
     fn test_env_bool_off_is_false_across_state_paths() {
-        let _env_lock = crate::test_support::ENV_LOCK
-            .lock()
-            .expect("env lock poisoned");
+        let _env_lock = crate::test_support::ENV_LOCK.blocking_lock();
         std::env::set_var("AISTAR_STREAM_LOCAL_TOOL_EVENTS", "off");
         std::env::set_var("AISTAR_STREAM_SERVER_EVENTS", "off");
         std::env::set_var("AISTAR_TOOL_CONFIRM", "off");
