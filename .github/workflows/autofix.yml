@@ -12,6 +12,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install stable Rust (with rustfmt)
         uses: dtolnay/rust-toolchain@stable
@@ -22,23 +24,37 @@ jobs:
         uses: uncenter/setup-taplo@v1
         with:
           version: "0.8.1"
+
+      # Normalize repo line endings so GitHub raw endpoints show proper multi-line files
       - name: Normalize line endings (LF)
         run: |
-          # Ensure consistent LF in the repo checkout
+          set -euo pipefail
           git add --renormalize .
-      # Fix Rust formatting
+          echo "After renormalize:"
+          git status --porcelain || true
+
       - name: Rustfmt (apply)
         run: cargo fmt
 
-      # Fix TOML formatting (Cargo.toml + any others)
       - name: Taplo fmt (apply)
         run: taplo fmt
 
-      # Apply compiler suggestions where safe (no edition change)
+      # Optional: leave off until formatting is settled
       - name: Cargo fix (apply)
-        run: cargo fix --allow-dirty --allow-staged
+        run: cargo fix --allow-dirty --allow-staged || true
 
-      # Create a PR with the changes
+      - name: Debug diffs
+        run: |
+          set -euo pipefail
+          echo "Cargo.toml line count:"
+          wc -l Cargo.toml || true
+          echo ""
+          echo "Git status:"
+          git status --porcelain || true
+          echo ""
+          echo "Git diff (stat):"
+          git diff --stat || true
+
       - name: Create PR
         uses: peter-evans/create-pull-request@v6
         with:
@@ -46,7 +62,12 @@ jobs:
           title: "chore: autofix formatting"
           body: |
             Automated formatting fixes:
+            - git add --renormalize .
             - cargo fmt
             - taplo fmt
-            - cargo fix
+            - cargo fix (best-effort)
+
+            Notes:
+            - If no PR is created, check the "Debug diffs" step output for an empty diff.
           branch: autofix/formatting
+          delete-branch: true
