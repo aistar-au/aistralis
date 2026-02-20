@@ -22,7 +22,10 @@ jobs:
         uses: uncenter/setup-taplo@v1
         with:
           version: "0.8.1"
-
+      - name: Normalize line endings (LF)
+        run: |
+          # Ensure consistent LF in the repo checkout
+          git add --renormalize .
       # Fix Rust formatting
       - name: Rustfmt (apply)
         run: cargo fmt
