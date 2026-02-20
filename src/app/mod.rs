@@ -15,8 +15,10 @@ use crate::ui::render::{
 use anyhow::Result;
 use crossterm::event::{poll, read, Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{backend::CrosstermBackend, Frame, Terminal};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::io::Stdout;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -32,6 +34,14 @@ const SCROLL_PAGE_UP_CMD_PREFIX: &str = "__AISTAR_SCROLL_PAGE_UP__:";
 const SCROLL_PAGE_DOWN_CMD_PREFIX: &str = "__AISTAR_SCROLL_PAGE_DOWN__:";
 const SCROLL_HOME_CMD: &str = "__AISTAR_SCROLL_HOME__";
 const SCROLL_END_CMD: &str = "__AISTAR_SCROLL_END__";
+const CURSOR_TICK_MS_ENV: &str = "AISTAR_CURSOR_TICK_MS";
+const STATUS_TICK_MS_ENV: &str = "AISTAR_STATUS_TICK_MS";
+const DEFAULT_CURSOR_TICK_MS: u64 = 500;
+const DEFAULT_STATUS_TICK_MS: u64 = 120;
+const MIN_CURSOR_TICK_MS: u64 = 100;
+const MAX_CURSOR_TICK_MS: u64 = 2000;
+const MIN_STATUS_TICK_MS: u64 = 50;
+const MAX_STATUS_TICK_MS: u64 = 500;
 
 struct HistoryState {
     lines: Vec<String>,
@@ -238,6 +248,97 @@ fn resolve_history_line_cap() -> usize {
         .and_then(|value| value.trim().parse::<usize>().ok())
         .filter(|cap| *cap > 0)
         .unwrap_or(DEFAULT_MAX_HISTORY_LINES)
+}
+
+fn resolve_tick_interval_ms(env_key: &str, default_ms: u64, min_ms: u64, max_ms: u64) -> u64 {
+    std::env::var(env_key)
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .map(|value| value.clamp(min_ms, max_ms))
+        .unwrap_or(default_ms)
+}
+
+fn render_state_hash(mode: &TuiMode, input_state: &InputState) -> u64 {
+    let mut hasher = DefaultHasher::new();
+
+    mode.status().hash(&mut hasher);
+    mode.history_state.lines.hash(&mut hasher);
+    mode.history_state.turn_in_progress.hash(&mut hasher);
+    mode.history_state.active_assistant_index.hash(&mut hasher);
+    mode.history_state.scroll_offset.hash(&mut hasher);
+    mode.history_state.auto_follow.hash(&mut hasher);
+    mode.overlay_state.auto_approve_session.hash(&mut hasher);
+    mode.pending_quit.hash(&mut hasher);
+    mode.quit_requested.hash(&mut hasher);
+
+    match mode.overlay_state.pending_approval.as_ref() {
+        Some(pending) => {
+            true.hash(&mut hasher);
+            pending.tool_name.hash(&mut hasher);
+            pending.input_preview.hash(&mut hasher);
+        }
+        None => false.hash(&mut hasher),
+    }
+
+    input_state.buffer.hash(&mut hasher);
+    input_state.cursor.hash(&mut hasher);
+
+    hasher.finish()
+}
+
+struct RenderGuard {
+    dirty: bool,
+    cursor_tick: Duration,
+    status_tick: Duration,
+    last_draw_at: Instant,
+    last_render_state_hash: Option<u64>,
+}
+
+impl RenderGuard {
+    fn new(now: Instant) -> Self {
+        let cursor_tick = Duration::from_millis(resolve_tick_interval_ms(
+            CURSOR_TICK_MS_ENV,
+            DEFAULT_CURSOR_TICK_MS,
+            MIN_CURSOR_TICK_MS,
+            MAX_CURSOR_TICK_MS,
+        ));
+        let status_tick = Duration::from_millis(resolve_tick_interval_ms(
+            STATUS_TICK_MS_ENV,
+            DEFAULT_STATUS_TICK_MS,
+            MIN_STATUS_TICK_MS,
+            MAX_STATUS_TICK_MS,
+        ));
+        Self::with_intervals(cursor_tick, status_tick, now)
+    }
+
+    fn with_intervals(cursor_tick: Duration, status_tick: Duration, now: Instant) -> Self {
+        Self {
+            dirty: true,
+            cursor_tick,
+            status_tick,
+            last_draw_at: now,
+            last_render_state_hash: None,
+        }
+    }
+
+    fn poll_timeout(&self) -> Duration {
+        self.cursor_tick.min(self.status_tick)
+    }
+
+    fn should_draw(&mut self, now: Instant, state_hash: u64) -> bool {
+        if self.last_render_state_hash != Some(state_hash) {
+            self.dirty = true;
+        }
+
+        if self.dirty || now.saturating_duration_since(self.last_draw_at) >= self.poll_timeout() {
+            self.dirty = false;
+            self.last_draw_at = now;
+            self.last_render_state_hash = Some(state_hash);
+            true
+        } else {
+            false
+        }
+    }
 }
 
 impl Default for TuiMode {
@@ -586,6 +687,7 @@ pub struct TuiFrontend {
     terminal: Terminal<CrosstermBackend<Stdout>>,
     quit: bool,
     editor: InputEditor,
+    render_guard: RenderGuard,
 }
 
 impl TuiFrontend {
@@ -594,6 +696,7 @@ impl TuiFrontend {
             terminal,
             quit: false,
             editor: InputEditor::new(),
+            render_guard: RenderGuard::new(Instant::now()),
         }
     }
 
@@ -714,7 +817,7 @@ impl FrontendAdapter<TuiMode> for TuiFrontend {
             self.quit = true;
             return None;
         }
-        if poll(Duration::from_millis(16)).unwrap_or(false) {
+        if poll(self.render_guard.poll_timeout()).unwrap_or(false) {
             if let Ok(event) = read() {
                 if mode.overlay_active() {
                     return overlay_event_to_user_input(event);
@@ -735,9 +838,12 @@ impl FrontendAdapter<TuiMode> for TuiFrontend {
 
     fn render(&mut self, mode: &TuiMode) {
         let input_state = &self.editor.input_state;
-        let _ = self.terminal.draw(|frame| {
-            draw_tui_frame(frame, mode, input_state);
-        });
+        let state_hash = render_state_hash(mode, input_state);
+        if self.render_guard.should_draw(Instant::now(), state_hash) {
+            let _ = self.terminal.draw(|frame| {
+                draw_tui_frame(frame, mode, input_state);
+            });
+        }
     }
 
     fn should_quit(&self) -> bool {
@@ -1081,6 +1187,47 @@ mod tests {
             ],
             "overlay must always render last"
         );
+    }
+
+    #[test]
+    fn test_render_not_called_when_state_unchanged() {
+        let start = Instant::now();
+        let mut guard = RenderGuard::with_intervals(
+            Duration::from_millis(500),
+            Duration::from_millis(120),
+            start,
+        );
+
+        assert!(
+            guard.should_draw(start, 11),
+            "first render should draw because the guard starts dirty"
+        );
+        assert!(
+            !guard.should_draw(start + Duration::from_millis(20), 11),
+            "unchanged state before tick interval must not draw"
+        );
+        assert!(
+            !guard.should_draw(start + Duration::from_millis(100), 11),
+            "unchanged state still below tick interval must not draw"
+        );
+        assert!(
+            guard.should_draw(start + Duration::from_millis(121), 11),
+            "unchanged state should draw when tick interval elapses"
+        );
+        assert!(
+            guard.should_draw(start + Duration::from_millis(122), 12),
+            "changed state should mark dirty and draw immediately"
+        );
+    }
+
+    #[test]
+    fn test_render_guard_poll_timeout_uses_min_tick_interval() {
+        let guard = RenderGuard::with_intervals(
+            Duration::from_millis(500),
+            Duration::from_millis(120),
+            Instant::now(),
+        );
+        assert_eq!(guard.poll_timeout(), Duration::from_millis(120));
     }
 
     #[test]
