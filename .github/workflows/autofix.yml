@@ -56,6 +56,31 @@ jobs:
           print(f"Ends with newline: {ends_with_lf}")
           PY
 
+      - name: Debug Cargo.toml bytes (raw URL)
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import urllib.request
+
+          url = "https://raw.githubusercontent.com/aistar-au/aistar-rs/main/Cargo.toml"
+          local_data = open("Cargo.toml", "rb").read()
+
+          try:
+              with urllib.request.urlopen(url, timeout=20) as resp:
+                  remote_data = resp.read()
+              nl = remote_data.count(b"\n")
+              cr = remote_data.count(b"\r")
+              ends_with_lf = remote_data.endswith(b"\n")
+              print(f"URL: {url}")
+              print(f"Remote size: {len(remote_data)} bytes")
+              print(f"Remote \\n count: {nl}")
+              print(f"Remote \\r count: {cr}")
+              print(f"Remote ends with LF: {ends_with_lf}")
+              print(f"Remote == local checkout: {remote_data == local_data}")
+          except Exception as e:
+              print(f"⚠️  Raw URL debug skipped: {e}")
+          PY
+
       - name: Force fix Cargo.toml line endings
         run: |
           set -euo pipefail
