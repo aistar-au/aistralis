@@ -792,6 +792,7 @@ mod tests {
     use super::*;
     use crate::api::{mock_client::MockApiClient, ApiClient};
     use crossterm::event::KeyEvent;
+    use futures::FutureExt;
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -1238,5 +1239,65 @@ mod tests {
         mode.on_user_input("n".to_string(), &mut ctx);
 
         assert!(!response_rx.await.expect("response should resolve"));
+    }
+
+    #[tokio::test]
+    async fn approval_sender_resolved_exactly_once() {
+        let mut ctx = setup_ctx();
+        let mut mode = TuiMode::new();
+
+        let (first_tx, first_rx) = tokio::sync::oneshot::channel::<bool>();
+        mode.on_model_update(
+            UiUpdate::ToolApprovalRequest(ToolApprovalRequest {
+                tool_name: "read_file".to_string(),
+                input_preview: "first".to_string(),
+                response_tx: first_tx,
+            }),
+            &mut ctx,
+        );
+
+        let mut first_rx = Box::pin(first_rx);
+        assert!(
+            first_rx.as_mut().now_or_never().is_none(),
+            "first approval sender must remain unresolved while overlay is active"
+        );
+
+        let (second_tx, second_rx) = tokio::sync::oneshot::channel::<bool>();
+        mode.on_model_update(
+            UiUpdate::ToolApprovalRequest(ToolApprovalRequest {
+                tool_name: "write_file".to_string(),
+                input_preview: "second".to_string(),
+                response_tx: second_tx,
+            }),
+            &mut ctx,
+        );
+
+        assert!(
+            !first_rx
+                .await
+                .expect("first sender should resolve when replaced"),
+            "replaced approval sender must resolve false exactly once"
+        );
+
+        let mut second_rx = Box::pin(second_rx);
+        assert!(
+            second_rx.as_mut().now_or_never().is_none(),
+            "second approval sender must remain unresolved before decision"
+        );
+
+        mode.on_user_input("1".to_string(), &mut ctx);
+        assert!(
+            second_rx
+                .await
+                .expect("second sender should resolve on accept"),
+            "approved overlay should resolve true exactly once"
+        );
+
+        mode.on_model_update(UiUpdate::TurnComplete, &mut ctx);
+        mode.on_model_update(UiUpdate::Error("post-resolution".to_string()), &mut ctx);
+        assert!(
+            !mode.overlay_active(),
+            "overlay lifecycle should clear cleanly after sender resolution"
+        );
     }
 }
