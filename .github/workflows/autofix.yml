@@ -25,35 +25,81 @@ jobs:
         with:
           version: "0.8.1"
 
-      # --- 1. Diagnose line ending situation ---
-      - name: Debug newline bytes (Cargo.toml)
+      # --- 1. Show what git sees ---
+      - name: Debug git tracked files
+        run: |
+          echo "=== All tracked files ==="
+          git ls-files
+          echo ""
+          echo "=== Is Cargo.toml tracked? ==="
+          if git ls-files --error-unmatch Cargo.toml 2>/dev/null; then
+            echo "✅ Cargo.toml IS tracked"
+          else
+            echo "❌ Cargo.toml is NOT tracked"
+          fi
+
+      # --- 2. Show file bytes BEFORE any changes ---
+      - name: Debug Cargo.toml bytes (before)
+        run: |
+          set -euo pipefail
+          echo "=== Cargo.toml raw bytes ==="
+          xxd Cargo.toml | head -30
+          echo ""
+          echo "=== Cargo.toml stats ==="
+          wc -c Cargo.toml
+          python3 -c "
+          data = open('Cargo.toml', 'rb').read()
+          print(f'Size: {len(data)} bytes')
+          print(f'\\n count: {data.count(b\"\\n\")}')
+          print(f'\\r count: {data.count(b\"\\r\")}')
+          print(f'Ends with newline: {data.endswith(b\"\\n\")}')
+          "
+
+      # --- 3. FORCE fix Cargo.toml directly (no git ls-files dependency) ---
+      - name: Force fix Cargo.toml line endings
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
+
           p = Path("Cargo.toml")
-          if p.exists():
-              data = p.read_bytes()
-              nl = data.count(b'\n')
-              cr = data.count(b'\r')
-              print(f"Cargo.toml: size={len(data)} bytes, \\n = {nl}, \\r = {cr}")
-              if nl == 0 and cr == 0:
-                  print("⚠️  NO LINE BREAKS DETECTED - file has no terminators!")
-              elif cr > 0 and nl == 0:
-                  print("⚠️  CR-only line endings (classic Mac)")
-              elif cr > 0 and nl > 0:
-                  print("⚠️  Mixed line endings (CRLF)")
+          if not p.exists():
+              print("❌ Cargo.toml does not exist")
+              exit(1)
+
+          data = p.read_bytes()
+          print(f"Before: size={len(data)}, \\n={data.count(b'\\n')}, \\r={data.count(b'\\r')}")
+
+          # Fix: if no line breaks, add LF at end
+          if data.count(b'\n') == 0 and data.count(b'\r') == 0:
+              if not data.endswith(b'\n'):
+                  data = data + b'\n'
+                  print("✅ Added LF terminator")
               else:
-                  print("✅ Line endings look normal (LF)")
-              print("First 200 bytes (hex):", data[:200].hex())
-              print("First 200 bytes (repr):", repr(data[:200]))
+                  print("⚠️  File already ends with LF but has no internal breaks")
+          # Fix: CR-only to LF
+          elif data.count(b'\r') > 0 and data.count(b'\n') == 0:
+              data = data.replace(b'\r', b'\n')
+              if not data.endswith(b'\n'):
+                  data = data + b'\n'
+              print("✅ Converted CR-only to LF")
+          # Fix: CRLF to LF
+          elif b'\r\n' in 
+              data = data.replace(b'\r\n', b'\n').replace(b'\r', b'\n')
+              print("✅ Converted CRLF to LF")
           else:
-              print("⚠️  Cargo.toml not found")
+              print("⚠️  No line ending issues detected")
+
+          p.write_bytes(data)
+
+          # Verify
+          data = p.read_bytes()
+          print(f"After:  size={len(data)}, \\n={data.count(b'\\n')}, \\r={data.count(b'\\r')}")
+          print(f"Ends with newline: {data.endswith(b'\\n')}")
           PY
 
-      # --- 2. Fix files with NO line breaks OR CR-only ---
-      - name: Fix line endings (no breaks + CR-only → LF)
-        id: fixlines
+      # --- 4. Fix other tracked text files ---
+      - name: Fix other tracked files
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -61,55 +107,42 @@ jobs:
           from pathlib import Path
 
           TEXT_EXT = {".rs",".toml",".yml",".yaml",".md",".txt",".json",".lock"}
-          ALWAYS = {"Cargo.toml","Cargo.lock",".gitattributes","README.md"}
 
           out = subprocess.check_output(["git","ls-files","-z"])
           files = [p for p in out.split(b"\0") if p]
 
           changed = []
           for b in files:
-              p = Path(b.decode("utf-8", "surrogateescape"))
-              if p.name in ALWAYS or p.suffix.lower() in TEXT_EXT:
+              name = b.decode("utf-8", "surrogateescape")
+              if name == "Cargo.toml":
+                  continue  # Already fixed
+              p = Path(name)
+              if p.suffix.lower() in TEXT_EXT:
                   try:
                       data = p.read_bytes()
                       if len(data) == 0:
-                          continue  # Skip empty files
-                      
+                          continue
                       nl = data.count(b'\n')
                       cr = data.count(b'\r')
-                      
                       modified = None
-                      
-                      # Case 1: No line breaks at all - add LF at end
-                      if nl == 0 and cr == 0:
-                          if not data.endswith(b'\n'):
-                              modified = data + b'\n'
-                          
-                      # Case 2: CR-only (classic Mac) - convert to LF
+                      if nl == 0 and cr == 0 and not data.endswith(b'\n'):
+                          modified = data + b'\n'
                       elif cr > 0 and nl == 0:
                           modified = data.replace(b'\r', b'\n')
-                          if not modified.endswith(b'\n'):
-                              modified += b'\n'
-                          
-                      # Case 3: CRLF - convert to LF
-                      elif b'\r\n' in data:
+                      elif b'\r\n' in 
                           modified = data.replace(b'\r\n', b'\n').replace(b'\r', b'\n')
-                      
-                      if modified is not None and modified != data:
+                      if modified and modified != data:
                           p.write_bytes(modified)
-                          changed.append(str(p))
+                          changed.append(name)
                   except Exception as e:
-                      print(f"⚠️  Skipping {p}: {e}")
+                      print(f"⚠️  Skipping {name}: {e}")
 
-          print(f"\n✅ Fixed {len(changed)} file(s)")
-          for x in sorted(changed)[:200]:
+          print(f"\n✅ Fixed {len(changed)} other file(s)")
+          for x in changed[:50]:
               print(" -", x)
-          
-          with open(Path.home() / "fix_count.txt", "w") as f:
-              f.write(str(len(changed)))
           PY
 
-      # --- 3. Verify .gitattributes exists ---
+      # --- 5. Verify .gitattributes ---
       - name: Verify .gitattributes exists and enforces LF
         run: |
           set -euo pipefail
@@ -117,61 +150,58 @@ jobs:
             echo "::error::.gitattributes not found!"
             exit 1
           fi
-          if ! grep -q 'text=auto eol=lf' .gitattributes; then
-            echo "::error::.gitattributes doesn't enforce LF!"
-            exit 1
-          fi
+          grep -q 'text=auto eol=lf' .gitattributes || exit 1
           echo "✅ .gitattributes verified"
 
-      # --- 4. Apply git renormalization ---
+      # --- 6. Apply git renormalization ---
       - name: Normalize line endings (LF)
         run: |
-          set -euo pipefail
           git add --renormalize . || true
+          echo "After renormalize:"
+          git status --porcelain || true
 
-      # --- 5. Apply formatters ---
+      # --- 7. Apply formatters ---
       - name: Rustfmt (apply)
         run: cargo fmt
 
       - name: Taplo fmt (apply)
         run: taplo fmt
 
-      # --- 6. Stage ALL changes ---
+      # --- 8. Stage ALL changes ---
       - name: Stage changes
         run: git add -A
 
-      # --- 7. Final verification ---
+      # --- 9. Show file bytes AFTER all changes ---
+      - name: Debug Cargo.toml bytes (after)
+        run: |
+          echo "=== Cargo.toml raw bytes (after) ==="
+          xxd Cargo.toml | head -30
+          echo ""
+          python3 -c "
+          data = open('Cargo.toml', 'rb').read()
+          print(f'Size: {len(data)} bytes')
+          print(f'\\n count: {data.count(b\"\\n\")}')
+          print(f'\\r count: {data.count(b\"\\r\")}')
+          print(f'Ends with newline: {data.endswith(b\"\\n\")}')
+          "
+
+      # --- 10. Final verification ---
       - name: Final debug summary
         run: |
           set -euo pipefail
           echo "=== Final Git status ==="
           git status --porcelain
           echo ""
-          echo "=== Final Git diff stat (cached) ==="
-          git diff --cached --stat
+          echo "=== Final Git diff stat ==="
+          git diff --stat
           echo ""
-          echo "=== Cargo.toml newline check (post-fix) ==="
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path("Cargo.toml")
-          if p.exists():
-              data = p.read_bytes()
-              print(f"Cargo.toml: size={len(data)} bytes, \\n = {data.count(b'\\n')}, \\r = {data.count(b'\\r')}")
-          PY
-          
           CHANGED=$(git status -s | wc -l)
-          FIX_COUNT=$(cat $HOME/fix_count.txt 2>/dev/null || echo "0")
-          
-          echo ""
-          echo "=== Summary ==="
-          echo "Files fixed: $FIX_COUNT"
           echo "Total git changes: $CHANGED"
-          
           if [ "$CHANGED" -eq 0 ]; then
             echo "::warning::No changes detected"
           fi
 
-      # --- 8. Create PR ---
+      # --- 11. Create PR ---
       - name: Create PR
         uses: peter-evans/create-pull-request@v6
         with:
@@ -181,7 +211,6 @@ jobs:
             Automated fixes:
             - Added missing line terminators (LF)
             - Converted CR-only/CRLF → LF
-            - Applied git renormalization
             - cargo fmt + taplo fmt
           branch: autofix/formatting
           delete-branch: true
