@@ -1,8 +1,8 @@
-use vexcoder::tools::ToolExecutor;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
 use tempfile::TempDir;
+use vexcoder::tools::ToolExecutor;
 
 #[test]
 fn test_path_traversal_blocked() {

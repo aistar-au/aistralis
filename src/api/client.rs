@@ -239,8 +239,7 @@ fn debug_payload_log_path() -> String {
 fn emit_debug_payload(request_url: &str, payload: &Value) {
     let formatted_payload = serde_json::to_string_pretty(payload)
         .unwrap_or_else(|_| "<payload serialization error>".to_string());
-    let log_entry =
-        format!("VEX_DEBUG_PAYLOAD request to {request_url}:\n{formatted_payload}\n");
+    let log_entry = format!("VEX_DEBUG_PAYLOAD request to {request_url}:\n{formatted_payload}\n");
 
     if std::io::stderr().is_terminal() {
         let path = debug_payload_log_path();

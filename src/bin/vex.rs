@@ -1,10 +1,10 @@
+use anyhow::Result;
+use std::io::{self, Write};
+use std::time::Duration;
 use vexcoder::app::{build_runtime, TuiMode};
 use vexcoder::config::Config;
 use vexcoder::runtime::frontend::{FrontendAdapter, UserInputEvent};
 use vexcoder::runtime::mode::RuntimeMode;
-use anyhow::Result;
-use std::io::{self, Write};
-use std::time::Duration;
 
 struct AppendTerminalFrontend {
     quit: bool,
@@ -101,8 +101,7 @@ impl FrontendAdapter<TuiMode> for AppendTerminalFrontend {
             self.streaming_line_open = false;
         }
 
-        for idx in self.rendered_line_count..lines.len() {
-            let line = &lines[idx];
+        for (idx, line) in lines.iter().enumerate().skip(self.rendered_line_count) {
             if line.starts_with("> ") {
                 continue;
             }
