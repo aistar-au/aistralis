@@ -1,4 +1,4 @@
-use aistralis::tools::ToolExecutor;
+use vexcoder::tools::ToolExecutor;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -237,8 +237,8 @@ fn test_git_tools_status_diff_add_commit_log_show() {
 
 fn init_git_repo(path: &Path) {
     run_git(path, &["init"]);
-    run_git(path, &["config", "user.email", "aistralis@example.com"]);
-    run_git(path, &["config", "user.name", "aistralis test"]);
+    run_git(path, &["config", "user.email", "vexcoder@example.com"]);
+    run_git(path, &["config", "user.name", "vexcoder test"]);
 }
 
 fn run_git(path: &Path, args: &[&str]) {

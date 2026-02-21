@@ -13,7 +13,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 pub type ByteStream = Pin<Box<dyn Stream<Item = Result<Bytes>> + Send>>;
-const DEFAULT_DEBUG_PAYLOAD_LOG_PATH: &str = "/tmp/aistralis-debug-payload.log";
+const DEFAULT_DEBUG_PAYLOAD_LOG_PATH: &str = "/tmp/vex-debug-payload.log";
 const SYSTEM_PROMPT: &str = "You are a coding assistant.\n\
 Use tools for all filesystem facts and changes.\n\
 When a user asks for repository facts, command output, file content, or code edits, call tools instead of guessing.\n\
@@ -59,7 +59,7 @@ enum ApiProtocol {
 
 impl ApiClient {
     pub fn new(config: &Config) -> Result<Self> {
-        let api_protocol = std::env::var("AISTRALIS_API_PROTOCOL")
+        let api_protocol = std::env::var("VEX_API_PROTOCOL")
             .ok()
             .and_then(parse_protocol)
             .unwrap_or_else(|| infer_api_protocol(&config.api_url));
@@ -195,7 +195,7 @@ impl ApiClient {
 }
 
 fn resolve_structured_tool_protocol(api_url: &str) -> bool {
-    if let Some(value) = std::env::var("AISTRALIS_STRUCTURED_TOOL_PROTOCOL")
+    if let Some(value) = std::env::var("VEX_STRUCTURED_TOOL_PROTOCOL")
         .ok()
         .and_then(parse_bool_flag)
     {
@@ -208,7 +208,7 @@ fn resolve_structured_tool_protocol(api_url: &str) -> bool {
 }
 
 fn resolve_max_tokens(api_url: &str) -> u32 {
-    if let Some(value) = std::env::var("AISTRALIS_MAX_TOKENS")
+    if let Some(value) = std::env::var("VEX_MAX_TOKENS")
         .ok()
         .and_then(|v| v.trim().parse::<u32>().ok())
     {
@@ -223,13 +223,13 @@ fn resolve_max_tokens(api_url: &str) -> u32 {
 }
 
 fn debug_payload_enabled() -> bool {
-    std::env::var("AISTRALIS_DEBUG_PAYLOAD")
+    std::env::var("VEX_DEBUG_PAYLOAD")
         .ok()
         .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
 }
 
 fn debug_payload_log_path() -> String {
-    std::env::var("AISTRALIS_DEBUG_PAYLOAD_PATH")
+    std::env::var("VEX_DEBUG_PAYLOAD_PATH")
         .ok()
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
@@ -240,7 +240,7 @@ fn emit_debug_payload(request_url: &str, payload: &Value) {
     let formatted_payload = serde_json::to_string_pretty(payload)
         .unwrap_or_else(|_| "<payload serialization error>".to_string());
     let log_entry =
-        format!("AISTRALIS_DEBUG_PAYLOAD request to {request_url}:\n{formatted_payload}\n");
+        format!("VEX_DEBUG_PAYLOAD request to {request_url}:\n{formatted_payload}\n");
 
     if std::io::stderr().is_terminal() {
         let path = debug_payload_log_path();
@@ -652,7 +652,7 @@ mod tests {
     #[test]
     fn test_structured_tool_protocol_env_off_disables_protocol() {
         let _env_lock = crate::test_support::ENV_LOCK.blocking_lock();
-        std::env::set_var("AISTRALIS_STRUCTURED_TOOL_PROTOCOL", "off");
+        std::env::set_var("VEX_STRUCTURED_TOOL_PROTOCOL", "off");
         let config = crate::config::Config {
             api_key: None,
             model: "mock-model".to_string(),
@@ -663,13 +663,13 @@ mod tests {
 
         let client = ApiClient::new(&config).expect("client should build");
         assert!(!client.supports_structured_tool_protocol());
-        std::env::remove_var("AISTRALIS_STRUCTURED_TOOL_PROTOCOL");
+        std::env::remove_var("VEX_STRUCTURED_TOOL_PROTOCOL");
     }
 
     #[test]
     fn test_structured_tool_protocol_defaults_off_for_local_endpoint() {
         let _env_lock = crate::test_support::ENV_LOCK.blocking_lock();
-        std::env::remove_var("AISTRALIS_STRUCTURED_TOOL_PROTOCOL");
+        std::env::remove_var("VEX_STRUCTURED_TOOL_PROTOCOL");
         let config = crate::config::Config {
             api_key: None,
             model: "local/llama.cpp".to_string(),
@@ -685,7 +685,7 @@ mod tests {
     #[test]
     fn test_structured_tool_protocol_defaults_on_for_remote_endpoint() {
         let _env_lock = crate::test_support::ENV_LOCK.blocking_lock();
-        std::env::remove_var("AISTRALIS_STRUCTURED_TOOL_PROTOCOL");
+        std::env::remove_var("VEX_STRUCTURED_TOOL_PROTOCOL");
         let config = crate::config::Config {
             api_key: Some("test-key".to_string()),
             model: "claude-sonnet-4-5-20250929".to_string(),

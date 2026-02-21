@@ -33,19 +33,19 @@ struct PendingPatchApproval {
 }
 
 const DEFAULT_MAX_HISTORY_LINES: usize = 2000;
-const MAX_HISTORY_LINES_ENV: &str = "AISTRALIS_MAX_HISTORY_LINES";
-const SCROLL_PAGE_UP_CMD_PREFIX: &str = "__AISTRALIS_SCROLL_PAGE_UP__:";
-const SCROLL_PAGE_DOWN_CMD_PREFIX: &str = "__AISTRALIS_SCROLL_PAGE_DOWN__:";
-const SCROLL_HOME_CMD: &str = "__AISTRALIS_SCROLL_HOME__";
-const SCROLL_END_CMD: &str = "__AISTRALIS_SCROLL_END__";
+const MAX_HISTORY_LINES_ENV: &str = "VEX_MAX_HISTORY_LINES";
+const SCROLL_PAGE_UP_CMD_PREFIX: &str = "__VEX_SCROLL_PAGE_UP__:";
+const SCROLL_PAGE_DOWN_CMD_PREFIX: &str = "__VEX_SCROLL_PAGE_DOWN__:";
+const SCROLL_HOME_CMD: &str = "__VEX_SCROLL_HOME__";
+const SCROLL_END_CMD: &str = "__VEX_SCROLL_END__";
 #[cfg(test)]
 const MAX_INPUT_PANE_ROWS: usize = 6;
-const OVERLAY_SCROLL_UP_CMD: &str = "__AISTRALIS_OVERLAY_SCROLL_UP__";
-const OVERLAY_SCROLL_DOWN_CMD: &str = "__AISTRALIS_OVERLAY_SCROLL_DOWN__";
-const OVERLAY_SCROLL_PAGE_UP_CMD_PREFIX: &str = "__AISTRALIS_OVERLAY_SCROLL_PAGE_UP__:";
-const OVERLAY_SCROLL_PAGE_DOWN_CMD_PREFIX: &str = "__AISTRALIS_OVERLAY_SCROLL_PAGE_DOWN__:";
-const OVERLAY_SCROLL_HOME_CMD: &str = "__AISTRALIS_OVERLAY_SCROLL_HOME__";
-const OVERLAY_SCROLL_END_CMD: &str = "__AISTRALIS_OVERLAY_SCROLL_END__";
+const OVERLAY_SCROLL_UP_CMD: &str = "__VEX_OVERLAY_SCROLL_UP__";
+const OVERLAY_SCROLL_DOWN_CMD: &str = "__VEX_OVERLAY_SCROLL_DOWN__";
+const OVERLAY_SCROLL_PAGE_UP_CMD_PREFIX: &str = "__VEX_OVERLAY_SCROLL_PAGE_UP__:";
+const OVERLAY_SCROLL_PAGE_DOWN_CMD_PREFIX: &str = "__VEX_OVERLAY_SCROLL_PAGE_DOWN__:";
+const OVERLAY_SCROLL_HOME_CMD: &str = "__VEX_OVERLAY_SCROLL_HOME__";
+const OVERLAY_SCROLL_END_CMD: &str = "__VEX_OVERLAY_SCROLL_END__";
 
 struct HistoryState {
     lines: Vec<String>,
@@ -372,7 +372,7 @@ fn resolve_history_line_cap() -> usize {
 
 #[cfg(test)]
 fn resolve_repo_label() -> String {
-    std::env::var("AISTRALIS_REPO_LABEL")
+    std::env::var("VEX_REPO_LABEL")
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
@@ -1680,7 +1680,7 @@ mod tests {
         let mut ctx = setup_ctx();
         let mut mode = TuiMode::new();
 
-        mode.on_user_input("__AISTRALIS_INTERRUPT__".to_string(), &mut ctx);
+        mode.on_user_input("__VEX_INTERRUPT__".to_string(), &mut ctx);
         assert!(
             mode.history_state.turn_in_progress,
             "plain text matching old sentinel must be treated as normal user input"

@@ -9,7 +9,7 @@
 
 ## Context
 
-`aistralis` is itself a coding agent, and its own development is conducted with heavy use of LLM coding agents (Aider, Claude, Gemini, etc.). This creates a unique meta-problem:
+`vexcoder` is itself a coding agent, and its own development is conducted with heavy use of LLM coding agents (Aider, Claude, Gemini, etc.). This creates a unique meta-problem:
 
 **How do you maintain engineering discipline — no regressions, clear ownership, auditable changes — when the implementor is a stateless language model that forgets everything between sessions?**
 
@@ -74,7 +74,7 @@ Anchor tests alone do not give an agent enough context to understand *what* to i
 
 ### Single large AGENTS.md / CLAUDE.md file
 
-Popularised by llama.cpp and other AI-native projects. Works well for stable conventions but degrades for per-task context because the file grows unbounded. `aistralis` uses `CONTRIBUTING.md` for stable workflow conventions and `TASKS/` for per-task ephemeral context — separating the two concerns.
+Popularised by llama.cpp and other AI-native projects. Works well for stable conventions but degrades for per-task context because the file grows unbounded. `vexcoder` uses `CONTRIBUTING.md` for stable workflow conventions and `TASKS/` for per-task ephemeral context — separating the two concerns.
 
 ### Monorepo-style ADR for every decision
 

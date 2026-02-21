@@ -1,4 +1,4 @@
-# Contributing to aistralis
+# Contributing to vexcoder
 
 > **Version:** This workflow applies from `v0.1.0-alpha` onward.  
 > **Architecture decisions** live in [`docs/adr/`](docs/adr/README.md).  
@@ -8,7 +8,7 @@
 
 ## 🛠️ The Agentic Workflow (Test-Driven Manifest)
 
-`aistralis` uses the **Test-Driven Manifest (TDM)** strategy for all bug fixes, features, and refactors. The full rationale is in [ADR-001](docs/adr/ADR-001-tdm-agentic-manifest-strategy.md). The short version:
+`vexcoder` uses the **Test-Driven Manifest (TDM)** strategy for all bug fixes, features, and refactors. The full rationale is in [ADR-001](docs/adr/ADR-001-tdm-agentic-manifest-strategy.md). The short version:
 
 1. **Identify task** — Check `TASKS/` for open items.
 2. **Anchor test** — Every task has exactly one failing Rust test before work begins. No anchor, no dispatch.
@@ -111,7 +111,7 @@ bash scripts/check_forbidden_imports.sh
 ## 📁 Project Structure
 
 ```
-aistralis/
+vexcoder/
 ├── CONTRIBUTING.md                # This file — TDM law
 ├── docs/
 │   ├── adr/                       # Architecture Decision Records (why)

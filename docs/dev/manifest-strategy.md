@@ -1,6 +1,6 @@
 # Agentic Repair: The Test-Driven Manifest (TDM)
 
-This document outlines the architectural routine for maintaining and evolving the `aistralis` codebase using the **Test-Driven Manifest (TDM)** strategy. This approach is designed to maximize the efficacy of AI coding agents while strictly preventing regressions.
+This document outlines the architectural routine for maintaining and evolving the `vexcoder` codebase using the **Test-Driven Manifest (TDM)** strategy. This approach is designed to maximize the efficacy of AI coding agents while strictly preventing regressions.
 
 ## The Core Philosophy
 

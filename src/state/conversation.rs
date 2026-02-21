@@ -1148,7 +1148,7 @@ fn emit_text_update(
 }
 
 fn structured_blocks_enabled() -> bool {
-    std::env::var("AISTRALIS_USE_STRUCTURED_BLOCKS")
+    std::env::var("VEX_USE_STRUCTURED_BLOCKS")
         .ok()
         .and_then(parse_bool_flag)
         .unwrap_or(true)
@@ -1213,19 +1213,19 @@ fn resolve_history_limits(is_local_endpoint: bool) -> HistoryLimits {
 
     HistoryLimits {
         max_assistant_history_chars: env_override_usize(
-            "AISTRALIS_MAX_ASSISTANT_HISTORY_CHARS",
+            "VEX_MAX_ASSISTANT_HISTORY_CHARS",
             defaults.max_assistant_history_chars,
             200,
             20_000,
         ),
         max_tool_result_history_chars: env_override_usize(
-            "AISTRALIS_MAX_TOOL_RESULT_HISTORY_CHARS",
+            "VEX_MAX_TOOL_RESULT_HISTORY_CHARS",
             defaults.max_tool_result_history_chars,
             200,
             40_000,
         ),
         max_api_messages: env_override_usize(
-            "AISTRALIS_MAX_API_MESSAGES",
+            "VEX_MAX_API_MESSAGES",
             defaults.max_api_messages,
             4,
             128,
@@ -1240,7 +1240,7 @@ fn resolve_tool_timeout(is_local_endpoint: bool) -> Duration {
         REMOTE_DEFAULT_TOOL_TIMEOUT_SECS
     };
 
-    let secs = std::env::var("AISTRALIS_TOOL_TIMEOUT_SECS")
+    let secs = std::env::var("VEX_TOOL_TIMEOUT_SECS")
         .ok()
         .and_then(|v| v.trim().parse::<u64>().ok())
         .unwrap_or(default_secs)
@@ -1250,7 +1250,7 @@ fn resolve_tool_timeout(is_local_endpoint: bool) -> Duration {
 
 fn resolve_max_tool_rounds(is_local_endpoint: bool) -> usize {
     let default_rounds = if is_local_endpoint { 12 } else { 24 };
-    std::env::var("AISTRALIS_MAX_TOOL_ROUNDS")
+    std::env::var("VEX_MAX_TOOL_ROUNDS")
         .ok()
         .and_then(|v| v.trim().parse::<usize>().ok())
         .unwrap_or(default_rounds)
@@ -1282,7 +1282,7 @@ fn required_tool_string<'a>(
 }
 
 fn stream_local_tool_events_enabled() -> bool {
-    std::env::var("AISTRALIS_STREAM_LOCAL_TOOL_EVENTS")
+    std::env::var("VEX_STREAM_LOCAL_TOOL_EVENTS")
         .ok()
         .and_then(parse_bool_flag)
         .unwrap_or(false)
@@ -1293,14 +1293,14 @@ fn default_tool_approval_enabled(is_local_endpoint: bool) -> bool {
 }
 
 fn tool_approval_enabled(is_local_endpoint: bool) -> bool {
-    std::env::var("AISTRALIS_TOOL_CONFIRM")
+    std::env::var("VEX_TOOL_CONFIRM")
         .ok()
         .and_then(parse_bool_flag)
         .unwrap_or(default_tool_approval_enabled(is_local_endpoint))
 }
 
 fn stream_server_events_enabled() -> bool {
-    std::env::var("AISTRALIS_STREAM_SERVER_EVENTS")
+    std::env::var("VEX_STREAM_SERVER_EVENTS")
         .ok()
         .and_then(parse_bool_flag)
         .unwrap_or(true)
@@ -1967,17 +1967,17 @@ cal.js
     #[test]
     fn test_env_bool_off_is_false_across_state_paths() {
         let _env_lock = crate::test_support::ENV_LOCK.blocking_lock();
-        std::env::set_var("AISTRALIS_STREAM_LOCAL_TOOL_EVENTS", "off");
-        std::env::set_var("AISTRALIS_STREAM_SERVER_EVENTS", "off");
-        std::env::set_var("AISTRALIS_TOOL_CONFIRM", "off");
+        std::env::set_var("VEX_STREAM_LOCAL_TOOL_EVENTS", "off");
+        std::env::set_var("VEX_STREAM_SERVER_EVENTS", "off");
+        std::env::set_var("VEX_TOOL_CONFIRM", "off");
 
         assert!(!stream_local_tool_events_enabled());
         assert!(!stream_server_events_enabled());
         assert!(!tool_approval_enabled(false));
 
-        std::env::remove_var("AISTRALIS_STREAM_LOCAL_TOOL_EVENTS");
-        std::env::remove_var("AISTRALIS_STREAM_SERVER_EVENTS");
-        std::env::remove_var("AISTRALIS_TOOL_CONFIRM");
+        std::env::remove_var("VEX_STREAM_LOCAL_TOOL_EVENTS");
+        std::env::remove_var("VEX_STREAM_SERVER_EVENTS");
+        std::env::remove_var("VEX_TOOL_CONFIRM");
     }
 
     #[test]
@@ -2335,7 +2335,7 @@ data: {"type":"message_stop"}"#.to_string(),
         let mut mock_tool_responses = HashMap::new();
         mock_tool_responses.insert(
             "Cargo.toml".to_string(),
-            "[package]\nname = \"aistralis\"".to_string(),
+            "[package]\nname = \"vexcoder\"".to_string(),
         );
         let mut manager = ConversationManager::new_mock(mock_api_client, mock_tool_responses);
 

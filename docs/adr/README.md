@@ -1,6 +1,6 @@
 # Architecture Decision Records
 
-This directory captures *why* significant decisions were made in `aistralis`. ADRs are permanent — even superseded records stay in the log. When an agent or contributor questions a design choice, the ADR is the authoritative answer.
+This directory captures *why* significant decisions were made in `vexcoder`. ADRs are permanent — even superseded records stay in the log. When an agent or contributor questions a design choice, the ADR is the authoritative answer.
 
 ## Relationship to TASKS/
 

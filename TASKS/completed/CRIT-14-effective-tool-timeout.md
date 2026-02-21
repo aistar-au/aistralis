@@ -6,7 +6,7 @@
 
 **Definition of Done:**
 1. Run tool execution in cancellable spawned blocking context.
-2. Enforce `AISTRALIS_TOOL_TIMEOUT_SECS` via timeout on spawned task.
+2. Enforce `VEX_TOOL_TIMEOUT_SECS` via timeout on spawned task.
 3. Return deterministic timeout error text and keep turn state consistent.
 4. Add/keep regression coverage for timeout path behavior.
 

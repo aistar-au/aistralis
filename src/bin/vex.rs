@@ -1,7 +1,7 @@
-use aistralis::app::{build_runtime, TuiMode};
-use aistralis::config::Config;
-use aistralis::runtime::frontend::{FrontendAdapter, UserInputEvent};
-use aistralis::runtime::mode::RuntimeMode;
+use vexcoder::app::{build_runtime, TuiMode};
+use vexcoder::config::Config;
+use vexcoder::runtime::frontend::{FrontendAdapter, UserInputEvent};
+use vexcoder::runtime::mode::RuntimeMode;
 use anyhow::Result;
 use std::io::{self, Write};
 use std::time::Duration;

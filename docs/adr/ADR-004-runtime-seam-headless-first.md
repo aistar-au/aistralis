@@ -10,13 +10,13 @@
 
 ## Context
 
-At v0.1.0-alpha, `aistralis` has a single execution path: the `App` struct in `src/app/mod.rs` runs the conversation loop, reads keyboard input from a TTY, and renders directly to stdout. The TUI skeleton (`src/terminal/mod.rs`, `src/ui/`) uses `ratatui` and `crossterm` but is not wired into the main loop.
+At v0.1.0-alpha, `vexcoder` has a single execution path: the `App` struct in `src/app/mod.rs` runs the conversation loop, reads keyboard input from a TTY, and renders directly to stdout. The TUI skeleton (`src/terminal/mod.rs`, `src/ui/`) uses `ratatui` and `crossterm` but is not wired into the main loop.
 
 Three problems stem from this architecture:
 
-1. **Testability**: `App::run()` cannot be tested without a real TTY. The `#[cfg(test)]` workaround (`AISTRALIS_TOOL_CONFIRM=false`) is fragile and only covers the tool-approval branch.
+1. **Testability**: `App::run()` cannot be tested without a real TTY. The `#[cfg(test)]` workaround (`VEX_TOOL_CONFIRM=false`) is fragile and only covers the tool-approval branch.
 
-2. **Headless execution**: Running `aistralis` in CI, in a pipe, or via `COMMAND_TO_AGENT.txt` dispatch requires TTY detection hacks scattered across `src/app/mod.rs`. There is no clean headless mode.
+2. **Headless execution**: Running `vex` in CI, in a pipe, or via `COMMAND_TO_AGENT.txt` dispatch requires TTY detection hacks scattered across `src/app/mod.rs`. There is no clean headless mode.
 
 3. **Future TUI**: The `ratatui` scaffolding exists but cannot be activated without gutting `App`. Any attempt to add a proper TUI will conflict with the current stdout renderer.
 

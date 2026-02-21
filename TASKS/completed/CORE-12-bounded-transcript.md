@@ -26,7 +26,7 @@ deployment until this is implemented.
    ```rust
    const MAX_HISTORY_LINES: usize = 2000;
    ```
-   Configurable via `AISTRALIS_MAX_HISTORY_LINES` env var (parsed with `parse_bool_flag`
+   Configurable via `VEX_MAX_HISTORY_LINES` env var (parsed with `parse_bool_flag`
    pattern; default 2000 if absent or unparseable).
 
 2. After every push to `history.messages` (in `on_user_input` and `on_model_update`),
@@ -60,7 +60,7 @@ deployment until this is implemented.
 1. `history.messages.len()` never exceeds `MAX_HISTORY_LINES` at the end of any
    `on_model_update` or `on_user_input` call.
 2. `active_assistant_msg` index remains valid after a drain event.
-3. `AISTRALIS_MAX_HISTORY_LINES` env var overrides the default cap.
+3. `VEX_MAX_HISTORY_LINES` env var overrides the default cap.
 4. Existing tests (`test_ref_08_stream_delta_appends_to_assistant_placeholder_not_user_line`
    and related) remain green.
 
@@ -73,7 +73,7 @@ deployment until this is implemented.
 ```rust
 #[test]
 fn test_transcript_does_not_exceed_cap_after_n_turns() {
-    // Override cap to a small value (e.g. 10 lines) via AISTRALIS_MAX_HISTORY_LINES
+    // Override cap to a small value (e.g. 10 lines) via VEX_MAX_HISTORY_LINES
     // Drive N > cap/2 turns of user input + StreamDelta + TurnComplete
     // Assert history.messages.len() <= cap at all times
 }

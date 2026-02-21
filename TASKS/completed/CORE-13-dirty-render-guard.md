@@ -37,7 +37,7 @@ ADR-012 gate #6 blocks deployment until unconditional idle redraws are eliminate
    const CURSOR_TICK_MS: u64 = 500;   // cursor blink
    const STATUS_TICK_MS: u64  = 120;  // status bar / spinner
    ```
-   Read from `AISTRALIS_CURSOR_TICK_MS` and `AISTRALIS_STATUS_TICK_MS` env vars with
+   Read from `VEX_CURSOR_TICK_MS` and `VEX_STATUS_TICK_MS` env vars with
    safe defaults. Both are bounded: cursor 100–2000ms, status 50–500ms.
 
 4. In the render loop:

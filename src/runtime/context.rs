@@ -263,7 +263,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn test_ref_08_tool_approval_forwarding_no_hang() {
         let _env_lock = crate::test_support::ENV_LOCK.lock().await;
-        std::env::set_var("AISTRALIS_TOOL_CONFIRM", "true");
+        std::env::set_var("VEX_TOOL_CONFIRM", "true");
         let first_response_sse = vec![
             r#"event: message_start
 data: {"type":"message_start","message":{"id":"msg_tool_then_final_1","type":"message","role":"assistant","model":"mock-model","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}"#.to_string(),
@@ -324,7 +324,7 @@ data: {"type":"message_stop"}"#.to_string(),
 
         assert!(saw_request, "must forward tool approval request");
         assert!(saw_complete, "must finish turn after approval response");
-        std::env::remove_var("AISTRALIS_TOOL_CONFIRM");
+        std::env::remove_var("VEX_TOOL_CONFIRM");
     }
 
     #[tokio::test]

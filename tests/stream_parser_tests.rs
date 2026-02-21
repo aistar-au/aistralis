@@ -1,5 +1,5 @@
-use aistralis::api::stream::StreamParser;
-use aistralis::types::{ContentBlock, StreamEvent};
+use vexcoder::api::stream::StreamParser;
+use vexcoder::types::{ContentBlock, StreamEvent};
 
 #[test]
 fn test_fragmented_events() {

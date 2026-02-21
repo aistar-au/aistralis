@@ -10,7 +10,7 @@
 
 ## Context
 
-`aistralis` targets two distinct user groups:
+`vexcoder` targets two distinct user groups:
 
 1. **Remote API users** who connect to `api.anthropic.com` using the Anthropic Messages API (`/v1/messages`). This group uses Claude models and expects streaming SSE with `content_block_start` / `content_block_delta` events and native `tool_use` blocks.
 
@@ -26,7 +26,7 @@ A tagged-text fallback (`<function=name><parameter=key>value</parameter></functi
 
 ## Decision
 
-Implement a single `ApiClient` that internally selects between `ApiProtocol::AnthropicMessages` and `ApiProtocol::OpenAiChatCompletions` based on the endpoint URL, with a manual override via `AISTRALIS_API_PROTOCOL`.
+Implement a single `ApiClient` that internally selects between `ApiProtocol::AnthropicMessages` and `ApiProtocol::OpenAiChatCompletions` based on the endpoint URL, with a manual override via `VEX_API_PROTOCOL`.
 
 **Protocol inference rules** (`infer_api_protocol()`):
 - URL contains `/chat/completions` → OpenAI
@@ -83,6 +83,6 @@ Would lose native Anthropic features (extended thinking, `betas` headers, native
 - Adding a third protocol (e.g., Google Gemini) requires extending the enum, the inference logic, the URL adapter, and the stream parser. The abstraction is extensible but not free.
 
 **Constraints imposed on future work:**
-- Protocol selection must remain automatic (URL-inferred) for the common case. Do not make `AISTRALIS_API_PROTOCOL` required.
+- Protocol selection must remain automatic (URL-inferred) for the common case. Do not make `VEX_API_PROTOCOL` required.
 - New protocol-specific features (e.g., Anthropic extended thinking) must degrade gracefully when the active protocol is OpenAI.
 - All protocol paths must be covered by integration tests using `MockApiClient`. Adding a new protocol path without mock coverage is not acceptable.

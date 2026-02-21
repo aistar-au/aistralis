@@ -1,12 +1,12 @@
 [package]
-name = "aistralis"
+name = "vexcoder"
 version = "0.1.0"
 edition = "2021"
 autobins = false
 
 [[bin]]
-name = "aistralis"
-path = "src/bin/aistralis.rs"
+name = "vex"
+path = "src/bin/vex.rs"
 
 [dependencies]
 anyhow = "1"

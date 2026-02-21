@@ -10,7 +10,7 @@
 
 ## Context
 
-`aistralis` gives an LLM direct `write_file` and `edit_file` access to the working directory. The tool executor must prevent the model from writing outside the workspace — whether through `..` traversal, absolute paths, or symlink escapes.
+`vexcoder` gives an LLM direct `write_file` and `edit_file` access to the working directory. The tool executor must prevent the model from writing outside the workspace — whether through `..` traversal, absolute paths, or symlink escapes.
 
 The naive solution is to call `std::fs::canonicalize()` on the resolved path and verify it starts with the canonical working directory. This is a well-known pattern and is correct for existing files.
 

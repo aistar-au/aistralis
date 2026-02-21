@@ -24,7 +24,7 @@ consuming tool outputs.
 
 ## Decision
 
-1. Default `AISTRALIS_STRUCTURED_TOOL_PROTOCOL` to `false` for local endpoints when the
+1. Default `VEX_STRUCTURED_TOOL_PROTOCOL` to `false` for local endpoints when the
    env var is unset; keep remote default `true`.
 2. Keep explicit env override behavior unchanged.
 3. Keep local fallback rounds in text-protocol history form and assert that

@@ -19,11 +19,11 @@ rounds. Local endpoints need a safer default that preserves this loop.
 
 ## Decision
 
-1. Default `AISTRALIS_STRUCTURED_TOOL_PROTOCOL` to `false` for local endpoints when the
+1. Default `VEX_STRUCTURED_TOOL_PROTOCOL` to `false` for local endpoints when the
    env var is unset.
 2. Keep remote endpoints defaulting to structured tool protocol (`true`).
 3. Keep explicit env override support:
-   - `AISTRALIS_STRUCTURED_TOOL_PROTOCOL=on|off` always wins.
+   - `VEX_STRUCTURED_TOOL_PROTOCOL=on|off` always wins.
 4. Preserve text-protocol fallback loop behavior as the canonical local reliability
    path:
    - assistant tool calls persisted as rendered tagged text
