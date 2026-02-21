@@ -356,6 +356,48 @@ fn resolve_history_line_cap() -> usize {
         .unwrap_or(DEFAULT_MAX_HISTORY_LINES)
 }
 
+fn strip_tagged_tool_markup(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut cursor = 0usize;
+
+    while let Some(rel_start) = text[cursor..].find("<function=") {
+        let start = cursor + rel_start;
+        out.push_str(&text[cursor..start]);
+
+        let Some(rel_end) = text[start..].find("</function>") else {
+            return strip_incomplete_tool_tag_suffix(&out);
+        };
+        cursor = start + rel_end + "</function>".len();
+    }
+
+    out.push_str(&text[cursor..]);
+    strip_incomplete_tool_tag_suffix(&out)
+}
+
+fn strip_incomplete_tool_tag_suffix(text: &str) -> String {
+    let mut out = text.to_string();
+    let Some(last_open) = out.rfind('<') else {
+        return out;
+    };
+
+    let suffix = &out[last_open..];
+    let suffix_lower = suffix.to_ascii_lowercase();
+    let looks_like_incomplete_tool_tag = "<function=".starts_with(&suffix_lower)
+        || "<function".starts_with(&suffix_lower)
+        || "</function>".starts_with(&suffix_lower)
+        || "</function".starts_with(&suffix_lower)
+        || "<parameter=".starts_with(&suffix_lower)
+        || "<parameter".starts_with(&suffix_lower)
+        || "</parameter>".starts_with(&suffix_lower)
+        || "</parameter".starts_with(&suffix_lower);
+
+    if looks_like_incomplete_tool_tag {
+        out.truncate(last_open);
+    }
+
+    out
+}
+
 fn resolve_repo_label() -> String {
     std::env::var("AISTAR_REPO_LABEL")
         .ok()
@@ -524,6 +566,7 @@ impl RuntimeMode for TuiMode {
                 };
                 if let Some(line) = self.history_state.lines.get_mut(idx) {
                     line.push_str(&text);
+                    *line = strip_tagged_tool_markup(line);
                 }
                 if self.history_state.auto_follow {
                     self.set_scroll_to_bottom();
@@ -1176,6 +1219,35 @@ mod tests {
 
         assert_eq!(mode.history_state.lines[0], "> hello");
         assert_eq!(mode.history_state.lines[1], "assistant");
+    }
+
+    #[test]
+    fn test_stream_delta_strips_tagged_tool_markup_from_history() {
+        let mut mode = TuiMode::new();
+        let mut ctx = setup_ctx();
+        mode.on_user_input("show diff".to_string(), &mut ctx);
+        mode.on_model_update(
+            UiUpdate::StreamDelta(
+                "I will check.\n<function=git_diff>\n</function>\nDone.".to_string(),
+            ),
+            &mut ctx,
+        );
+
+        assert_eq!(mode.history_state.lines[1], "I will check.\n\nDone.");
+        assert!(!mode.history_state.lines[1].contains("<function="));
+    }
+
+    #[test]
+    fn test_stream_delta_hides_incomplete_tool_tag_suffix() {
+        let mut mode = TuiMode::new();
+        let mut ctx = setup_ctx();
+        mode.on_user_input("status".to_string(), &mut ctx);
+        mode.on_model_update(
+            UiUpdate::StreamDelta("Checking\n<function=git_status".to_string()),
+            &mut ctx,
+        );
+
+        assert_eq!(mode.history_state.lines[1], "Checking\n");
     }
 
     #[test]

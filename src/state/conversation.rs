@@ -343,8 +343,41 @@ impl ConversationManager {
                 }
             }
 
-            let tool_use_blocks: Vec<ContentBlock> =
+            let mut assistant_text_for_history = assistant_text.clone();
+            let mut tool_use_blocks: Vec<ContentBlock> =
                 tool_use_blocks.into_iter().flatten().collect();
+            if tool_use_blocks.is_empty() && self.client.is_local_endpoint() {
+                let tagged_calls = parse_tagged_tool_calls(&assistant_text);
+                if !tagged_calls.is_empty() {
+                    assistant_text_for_history = strip_tagged_tool_markup(&assistant_text);
+                    tool_use_blocks = tagged_calls
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, call)| ContentBlock::ToolUse {
+                            id: format!("toolu_tagged_{rounds}_{index}"),
+                            name: call.name,
+                            input: call.input,
+                        })
+                        .collect();
+                    if use_structured_blocks {
+                        let fallback_start_index = self.current_turn_blocks.len();
+                        for (offset, block) in tool_use_blocks.iter().enumerate() {
+                            if let ContentBlock::ToolUse { id, name, input } = block {
+                                self.upsert_turn_block(
+                                    fallback_start_index + offset,
+                                    StreamBlock::ToolCall {
+                                        id: id.clone(),
+                                        name: name.clone(),
+                                        input: input.clone(),
+                                        status: ToolStatus::Pending,
+                                    },
+                                    stream_delta_tx,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
 
             if !tool_use_blocks.is_empty() {
                 let current_signature = tool_round_signature(&tool_use_blocks);
@@ -369,12 +402,12 @@ impl ConversationManager {
                 repeated_read_only_rounds = 0;
             }
 
-            let assistant_history_text = if assistant_text.is_empty() && !tool_use_blocks.is_empty()
-            {
-                render_tool_calls_for_text_protocol(&tool_use_blocks)
-            } else {
-                assistant_text.clone()
-            };
+            let assistant_history_text =
+                if assistant_text_for_history.is_empty() && !tool_use_blocks.is_empty() {
+                    render_tool_calls_for_text_protocol(&tool_use_blocks)
+                } else {
+                    assistant_text_for_history.clone()
+                };
             let assistant_history_text =
                 truncate_for_history(&assistant_history_text, limits.max_assistant_history_chars);
 
@@ -382,10 +415,10 @@ impl ConversationManager {
 
             if use_structured_round {
                 let mut assistant_content_blocks = Vec::new();
-                if !assistant_text.is_empty() {
+                if !assistant_text_for_history.is_empty() {
                     assistant_content_blocks.push(ContentBlock::Text {
                         text: truncate_for_history(
-                            &assistant_text,
+                            &assistant_text_for_history,
                             limits.max_assistant_history_chars,
                         ),
                     });
@@ -410,7 +443,7 @@ impl ConversationManager {
                         stream_delta_tx,
                     );
                 }
-                return Ok(assistant_text);
+                return Ok(assistant_text_for_history);
             }
 
             let mut tool_result_blocks = Vec::new();
@@ -1135,14 +1168,12 @@ fn tool_input_preview(tool_name: &str, input: &serde_json::Value) -> String {
     )
 }
 
-#[cfg(test)]
 #[derive(Debug, Clone)]
 struct TaggedToolCall {
     name: String,
     input: serde_json::Value,
 }
 
-#[cfg(test)]
 fn parse_tagged_tool_calls(text: &str) -> Vec<TaggedToolCall> {
     let mut calls = Vec::new();
     let mut cursor = 0usize;
@@ -1179,7 +1210,6 @@ fn parse_tagged_tool_calls(text: &str) -> Vec<TaggedToolCall> {
     calls
 }
 
-#[cfg(test)]
 fn find_function_body_bounds(text: &str, body_start: usize) -> (usize, usize) {
     let function_close = text[body_start..]
         .find("</function>")
@@ -1196,7 +1226,6 @@ fn find_function_body_bounds(text: &str, body_start: usize) -> (usize, usize) {
     }
 }
 
-#[cfg(test)]
 fn parse_tagged_parameters(body: &str) -> serde_json::Map<String, serde_json::Value> {
     let mut input = serde_json::Map::new();
     let mut parameter_cursor = 0usize;
@@ -1240,6 +1269,48 @@ fn parse_tagged_parameters(body: &str) -> serde_json::Map<String, serde_json::Va
     input
 }
 
+fn strip_tagged_tool_markup(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut cursor = 0usize;
+
+    while let Some(rel_start) = text[cursor..].find("<function=") {
+        let start = cursor + rel_start;
+        out.push_str(&text[cursor..start]);
+
+        let Some(rel_end) = text[start..].find("</function>") else {
+            return strip_incomplete_tool_tag_suffix(&out);
+        };
+        cursor = start + rel_end + "</function>".len();
+    }
+
+    out.push_str(&text[cursor..]);
+    strip_incomplete_tool_tag_suffix(&out)
+}
+
+fn strip_incomplete_tool_tag_suffix(text: &str) -> String {
+    let mut out = text.to_string();
+    let Some(last_open) = out.rfind('<') else {
+        return out;
+    };
+
+    let suffix = &out[last_open..];
+    let suffix_lower = suffix.to_ascii_lowercase();
+    let looks_like_incomplete_tool_tag = "<function=".starts_with(&suffix_lower)
+        || "<function".starts_with(&suffix_lower)
+        || "</function>".starts_with(&suffix_lower)
+        || "</function".starts_with(&suffix_lower)
+        || "<parameter=".starts_with(&suffix_lower)
+        || "<parameter".starts_with(&suffix_lower)
+        || "</parameter>".starts_with(&suffix_lower)
+        || "</parameter".starts_with(&suffix_lower);
+
+    if looks_like_incomplete_tool_tag {
+        out.truncate(last_open);
+    }
+
+    out
+}
+
 fn render_tool_calls_for_text_protocol(blocks: &[ContentBlock]) -> String {
     let mut out = String::new();
     for block in blocks {
@@ -1274,7 +1345,6 @@ fn json_value_to_text_protocol_value(value: &serde_json::Value) -> String {
     }
 }
 
-#[cfg(test)]
 fn normalize_tagged_parameter_value(raw: &str) -> String {
     let mut value = raw.replace("\r\n", "\n");
     if value.starts_with('\n') {
@@ -1661,6 +1731,18 @@ cal.js
     }
 
     #[test]
+    fn test_strip_tagged_tool_markup_removes_function_blocks() {
+        let text = "Checking.\n<function=git_status>\n</function>\nDone.";
+        assert_eq!(strip_tagged_tool_markup(text), "Checking.\n\nDone.");
+    }
+
+    #[test]
+    fn test_strip_tagged_tool_markup_drops_incomplete_suffix() {
+        let text = "Checking.\n<function=git_status";
+        assert_eq!(strip_tagged_tool_markup(text), "Checking.\n");
+    }
+
+    #[test]
     fn test_truncate_for_history() {
         let text = "abcdefghij";
         let truncated = truncate_for_history(text, 40);
@@ -1749,7 +1831,7 @@ cal.js
     }
 
     #[tokio::test]
-    async fn test_text_tagged_tool_call_text_is_not_executed_as_tool() -> Result<()> {
+    async fn test_text_tagged_tool_call_executes_as_fallback_for_local_endpoint() -> Result<()> {
         let first_response_sse = vec![
             r#"event: message_start
 data: {"type":"message_start","message":{"id":"msg_mock_10","type":"message","role":"assistant","model":"mock-model","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}"#.to_string(),
@@ -1762,10 +1844,23 @@ data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":
             r#"event: message_stop
 data: {"type":"message_stop"}"#.to_string(),
         ];
+        let second_response_sse = vec![
+            r#"event: message_start
+data: {"type":"message_start","message":{"id":"msg_mock_11","type":"message","role":"assistant","model":"mock-model","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}"#.to_string(),
+            r#"event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#.to_string(),
+            r#"event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Read complete: Hello from fallback."}}"#.to_string(),
+            r#"event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":9}}"#.to_string(),
+            r#"event: message_stop
+data: {"type":"message_stop"}"#.to_string(),
+        ];
 
         let mock_api_client =
             ApiClient::new_mock(Arc::new(crate::api::mock_client::MockApiClient::new(vec![
                 first_response_sse,
+                second_response_sse,
             ])));
 
         let mut mock_tool_responses = HashMap::new();
@@ -1773,28 +1868,29 @@ data: {"type":"message_stop"}"#.to_string(),
         let mut manager = ConversationManager::new_mock(mock_api_client, mock_tool_responses);
 
         let final_text = manager.send_message("Read file".into(), None).await?;
-        assert!(final_text.contains("<function=read_file>"));
-        assert!(!final_text.contains("Hello from fallback."));
+        assert!(final_text.contains("Read complete: Hello from fallback."));
 
         let messages = &manager.api_messages;
-        assert_eq!(messages.len(), 2);
-        assert_eq!(messages[1].role, "assistant");
-        if let Content::Blocks(blocks) = &messages[1].content {
-            assert_eq!(blocks.len(), 1);
-            if let ContentBlock::Text { text } = &blocks[0] {
-                assert!(text.contains("<function=read_file>"));
-            } else {
-                panic!("expected assistant text block content");
-            }
-        } else {
-            panic!("expected assistant blocks content");
-        }
+        assert!(
+            messages.iter().any(|message| {
+                if message.role != "assistant" {
+                    return false;
+                }
+                match &message.content {
+                    Content::Blocks(blocks) => blocks.iter().any(
+                        |block| matches!(block, ContentBlock::ToolUse { name, .. } if name == "read_file"),
+                    ),
+                    _ => false,
+                }
+            }),
+            "expected fallback parser to convert tagged tool syntax into ToolUse blocks"
+        );
 
         Ok(())
     }
 
     #[tokio::test]
-    async fn test_text_tagged_tool_call_does_not_emit_structured_tool_blocks() -> Result<()> {
+    async fn test_text_tagged_tool_call_emits_structured_tool_blocks_for_fallback() -> Result<()> {
         let first_response_sse = vec![
             r#"event: message_start
 data: {"type":"message_start","message":{"id":"msg_mock_fallback_20","type":"message","role":"assistant","model":"mock-model","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}"#.to_string(),
@@ -1807,10 +1903,23 @@ data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":
             r#"event: message_stop
 data: {"type":"message_stop"}"#.to_string(),
         ];
+        let second_response_sse = vec![
+            r#"event: message_start
+data: {"type":"message_start","message":{"id":"msg_mock_fallback_21","type":"message","role":"assistant","model":"mock-model","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}"#.to_string(),
+            r#"event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#.to_string(),
+            r#"event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"done"}}"#.to_string(),
+            r#"event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":9}}"#.to_string(),
+            r#"event: message_stop
+data: {"type":"message_stop"}"#.to_string(),
+        ];
 
         let mock_api_client =
             ApiClient::new_mock(Arc::new(crate::api::mock_client::MockApiClient::new(vec![
                 first_response_sse,
+                second_response_sse,
             ])));
         let mut mock_tool_responses = HashMap::new();
         mock_tool_responses.insert("file.txt".to_string(), "Hello from fallback.".to_string());
@@ -1852,7 +1961,7 @@ data: {"type":"message_stop"}"#.to_string(),
             }
         }
 
-        assert!(!saw_tool_call_block);
+        assert!(saw_tool_call_block);
         Ok(())
     }
 
@@ -1913,10 +2022,23 @@ data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":
             r#"event: message_stop
 data: {"type":"message_stop"}"#.to_string(),
         ];
+        let second_response_sse = vec![
+            r#"event: message_start
+data: {"type":"message_start","message":{"id":"msg_mock_local_11","type":"message","role":"assistant","model":"mock-model","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}"#.to_string(),
+            r#"event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#.to_string(),
+            r#"event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Tool result consumed."}}"#.to_string(),
+            r#"event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":9}}"#.to_string(),
+            r#"event: message_stop
+data: {"type":"message_stop"}"#.to_string(),
+        ];
 
         let mock_api_client =
             ApiClient::new_mock(Arc::new(crate::api::mock_client::MockApiClient::new(vec![
                 first_response_sse,
+                second_response_sse,
             ])))
             .with_structured_tool_protocol(false);
 
@@ -1928,17 +2050,23 @@ data: {"type":"message_stop"}"#.to_string(),
         let mut manager = ConversationManager::new_mock(mock_api_client, mock_tool_responses);
 
         let final_text = manager.send_message("Read file".into(), None).await?;
-        assert!(final_text.contains("<function=read_file>"));
+        assert!(final_text.contains("Tool result consumed."));
 
         let messages = &manager.api_messages;
-        assert_eq!(messages.len(), 2);
-        assert_eq!(messages[1].role, "assistant");
-        match &messages[1].content {
-            Content::Text(text) => {
-                assert!(text.contains("<function=read_file>"));
-            }
-            _ => panic!("expected assistant text content in local text protocol"),
-        }
+        assert!(
+            messages.iter().any(|message| {
+                if message.role != "assistant" {
+                    return false;
+                }
+                match &message.content {
+                    Content::Text(text) => {
+                        text.contains("I will read it.") && !text.contains("<function=")
+                    }
+                    _ => false,
+                }
+            }),
+            "expected fallback to sanitize tagged tool syntax from assistant history text"
+        );
 
         Ok(())
     }

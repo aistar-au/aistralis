@@ -6,11 +6,14 @@ use bytes::Bytes;
 use futures::{Stream, StreamExt};
 use serde_json::json;
 use serde_json::Value;
+use std::fs::OpenOptions;
+use std::io::{IsTerminal, Write};
 use std::pin::Pin;
 #[cfg(test)]
 use std::sync::Arc;
 
 pub type ByteStream = Pin<Box<dyn Stream<Item = Result<Bytes>> + Send>>;
+const DEFAULT_DEBUG_PAYLOAD_LOG_PATH: &str = "/tmp/aistar-debug-payload.log";
 
 #[cfg(test)]
 pub trait MockStreamProducer: Send + Sync {
@@ -151,16 +154,8 @@ impl ApiClient {
             .header("content-type", "application/json")
             .json(&payload);
 
-        if std::env::var("AISTAR_DEBUG_PAYLOAD")
-            .ok()
-            .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        {
-            eprintln!(
-                "AISTAR_DEBUG_PAYLOAD request to {}:\n{}",
-                self.request_url(),
-                serde_json::to_string_pretty(&payload)
-                    .unwrap_or_else(|_| "<payload serialization error>".to_string())
-            );
+        if debug_payload_enabled() {
+            emit_debug_payload(&self.request_url(), &payload);
         }
 
         match self.api_protocol {
@@ -208,6 +203,43 @@ fn resolve_max_tokens(api_url: &str) -> u32 {
     } else {
         4096
     }
+}
+
+fn debug_payload_enabled() -> bool {
+    std::env::var("AISTAR_DEBUG_PAYLOAD")
+        .ok()
+        .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+}
+
+fn debug_payload_log_path() -> String {
+    std::env::var("AISTAR_DEBUG_PAYLOAD_PATH")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| DEFAULT_DEBUG_PAYLOAD_LOG_PATH.to_string())
+}
+
+fn emit_debug_payload(request_url: &str, payload: &Value) {
+    let formatted_payload = serde_json::to_string_pretty(payload)
+        .unwrap_or_else(|_| "<payload serialization error>".to_string());
+    let log_entry =
+        format!("AISTAR_DEBUG_PAYLOAD request to {request_url}:\n{formatted_payload}\n");
+
+    if std::io::stderr().is_terminal() {
+        let path = debug_payload_log_path();
+        let write_result = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .and_then(|mut file| file.write_all(log_entry.as_bytes()));
+
+        if write_result.is_err() {
+            eprintln!("{log_entry}");
+        }
+        return;
+    }
+
+    eprintln!("{log_entry}");
 }
 
 fn parse_protocol(value: String) -> Option<ApiProtocol> {
