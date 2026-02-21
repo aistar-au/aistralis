@@ -40,6 +40,7 @@ A task manifest may reference an ADR. An ADR may spawn one or more tasks. They a
 | [ADR-015](ADR-015-local-endpoint-text-protocol-default.md) | Local endpoint text-protocol default for tool loop reliability | Accepted |
 | [ADR-016](ADR-016-local-tool-loop-guard-and-correction.md) | Local tool-loop guard and correction path | Accepted |
 | [ADR-018](ADR-018-managed-tui-scrollback-streaming-cell-overlays.md) | Managed TUI scrollback, streaming cell, overlays | Proposed |
+| [ADR-019](ADR-019-adr-018-follow-up-correctness-cutover-cleanup.md) | ADR-018 follow-up sequencing for correctness, cutover, and cleanup | Proposed |
 
 ## Superseded ADRs
 
