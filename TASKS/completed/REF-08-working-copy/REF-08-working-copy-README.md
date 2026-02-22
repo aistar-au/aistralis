@@ -9,13 +9,13 @@ This directory captures the reviewed REF-08 cutover deltas that were staged in
 
 ## Delta index
 
-- `DELTA-A-assistant-stream-separation.md`
-- `DELTA-B-blockdelta-stream-filter.md`
-- `DELTA-C-input-editor-utf8-safety.md`
-- `DELTA-D-frontend-mode-aware-poll-contract.md`
-- `DELTA-E-typed-interrupt-routing.md`
-- `DELTA-F-deterministic-env-tests-and-cancel-progression.md`
-- `review-checklist.md`
+- `WORKING-COPY-DELTA-A-assistant-stream-separation.md`
+- `WORKING-COPY-DELTA-B-blockdelta-stream-filter.md`
+- `WORKING-COPY-DELTA-C-input-editor-utf8-safety.md`
+- `WORKING-COPY-DELTA-D-frontend-mode-aware-poll-contract.md`
+- `WORKING-COPY-DELTA-E-typed-interrupt-routing.md`
+- `WORKING-COPY-DELTA-F-deterministic-env-tests-and-cancel-progression.md`
+- `WORKING-COPY-review-checklist.md`
 
 ## Notes
 

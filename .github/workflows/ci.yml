@@ -61,3 +61,12 @@ jobs:
             exit 1
           fi
           echo "clean"
+
+      - name: Enforce Rust 2018 module entry naming
+        run: |
+          if find src -mindepth 2 -maxdepth 2 -type f -name 'mod.rs' | grep -q .; then
+            echo "FAIL: Rust 2018 path-based module convention violated."
+            find src -mindepth 2 -maxdepth 2 -type f -name 'mod.rs' | sort
+            exit 1
+          fi
+          echo "clean"

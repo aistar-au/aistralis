@@ -2,7 +2,7 @@
 
 > **Version:** This workflow applies from `v0.1.0-alpha` onward.  
 > **Architecture decisions** live in [`TASKS/`](TASKS/ADR-README.md).  
-> **Dispatch ADRs not yet completed** live in [`TASKS/`](TASKS/README.md) as `TASKS/ADR-XXX-*.md`.  
+> **Dispatch ADRs not yet completed** live in [`TASKS/`](TASKS/TASKS-DISPATCH-MAP.md) as `TASKS/ADR-XXX-*.md`.  
 > The ADRs explain *why* the project is structured this way. Read them before opening a PR.
 
 ---
@@ -79,6 +79,20 @@ Completed tasks move to `TASKS/completed/` — do not delete them.
 
 ---
 
+## 🧩 Rust Module File Naming (Rust 2018+)
+
+Use path-based module entry files across `src/`.
+
+| Situation | Required path |
+| :--- | :--- |
+| Top-level module entry | `src/<module>.rs` |
+| Child module | `src/<module>/<child>.rs` |
+
+Do not introduce new `src/*/mod.rs` files unless an external tool or macro
+requires that layout.
+
+---
+
 ## 🗺️ Runtime-core Status
 
 REF-08 full cutover is complete and merged (2026-02-19).
@@ -129,16 +143,26 @@ vexcoder/
 │   ├── SEC-01-path-security.md
 │   └── completed/
 ├── src/
+│   ├── api.rs                     # Top-level entry for api module
 │   ├── api/                       # HTTP client, stream parser, mock
+│   ├── app.rs                     # Top-level entry for app module
 │   ├── app/                       # TUI mode + frontend wiring to runtime core
+│   ├── config.rs                  # Top-level entry for config module
 │   ├── config/                    # Environment variable loading
 │   ├── edit_diff/                 # LCS-based diff renderer
+│   ├── runtime.rs                 # Top-level entry for runtime module
 │   ├── runtime/                   # Canonical runtime loop, mode traits, updates
+│   ├── state.rs                   # Top-level entry for state module
 │   ├── state/                     # ConversationManager, message history
+│   ├── terminal.rs                # Top-level entry for terminal module
 │   ├── terminal/                  # ratatui/crossterm setup (TUI skeleton)
+│   ├── tools.rs                   # Top-level entry for tools module
 │   ├── tools/                     # ToolExecutor — filesystem + git
+│   ├── types.rs                   # Top-level entry for types module
 │   ├── types/                     # ApiMessage, Content, StreamEvent
-│   └── ui/                        # ratatui render functions
+│   ├── ui.rs                      # Top-level entry for ui module
+│   ├── ui/                        # ratatui render functions
+│   └── util.rs                    # Top-level entry for util helpers
 └── tests/                         # Integration tests
 ```
 

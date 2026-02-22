@@ -1,11 +1,11 @@
 # Task CRIT-02: Serde Serialization Repair
 
-**Target File:** `src/types/api.rs`
+**Target File:** `src/types/api_types.rs`
 
 **Issue:** The `ApiMessage` struct uses `#[serde(flatten)]` on the `content` field. This causes serialization to fail with error: "can only flatten structs and maps (got a string)" when the content is `Content::Text(String)`.
 
 **Definition of Done:**
-1. Remove `#[serde(flatten)]` from `src/types/api.rs` line 6.
+1. Remove `#[serde(flatten)]` from `src/types/api_types.rs` line 6.
 2. Ensure the `test_crit_02_regression` anchor test passes.
 
 **Context:**
@@ -24,4 +24,4 @@ Error("can only flatten structs and maps (got a string)", line: 0, column: 0)
 }
 ```
 
-**Anchor Test:** `test_crit_02_regression` in `src/types/api.rs`
+**Anchor Test:** `test_crit_02_regression` in `src/types/api_types.rs`
