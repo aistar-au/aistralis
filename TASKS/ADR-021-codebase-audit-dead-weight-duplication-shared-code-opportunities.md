@@ -280,6 +280,9 @@ git diff --numstat -- src/runtime/loop.rs
 - **Follow-up**:
   - Keep current guard; consider debug-only observability for dropped stale
     deltas if field reports indicate truncation symptoms.
+- **ADR note**:
+  - This is intentional stale-delta protection, so it is not currently treated
+    as a hard ADR-009 contract break.
 
 ### 26) SSE parser buffer can grow unbounded without frame delimiter
 - **Status**: **Confirmed**
@@ -337,13 +340,64 @@ git diff --numstat -- src/runtime/loop.rs
   - `RwLock` does not meaningfully improve current single active-turn model.
 - **Priority**: **N/A**
 
+## Additional Triage from Latest ADR-022 Draft (Critical First)
+
+### 31) UTF-8 fragmentation risk in SSE chunk ingestion (`from_utf8_lossy` per chunk)
+- **Status**: **Confirmed**
+- **Evidence**:
+  - `src/api/stream.rs::process` currently appends
+    `String::from_utf8_lossy(chunk)` directly into parser buffer.
+  - Multi-byte UTF-8 sequences split across network chunks can be replaced with
+    `U+FFFD`, causing irreversible stream-text corruption.
+- **Priority**: **P1**
+- **Follow-up**:
+  - Move parser buffering to raw bytes and decode only on complete frame
+    boundaries (or with an incremental UTF-8 decoder).
+
+### 32) `KeyEventKind::Release` filtering portability concern
+- **Status**: **Partially accurate**
+- **Evidence**:
+  - `src/bin/vex.rs` ignores `KeyEventKind::Release`.
+  - Behavior can vary by terminal/backend; however, current filtering does not
+    imply guaranteed double-processing by itself.
+- **Priority**: **P2**
+- **Follow-up**:
+  - Keep current behavior; add backend-specific regression coverage if field
+    reports show duplicate/missed key handling.
+
+### 33) Idle backoff tuning claim (`IDLE_LOOP_BACKOFF=4ms`)
+- **Status**: **Partially accurate**
+- **Evidence**:
+  - Runtime now uses tick/state-driven rendering (P0.17 complete).
+  - Effective idle cadence is also bounded by frontend polling
+    (`event::poll(16ms)` in `src/bin/vex.rs`), so the practical loop rate is
+    not 250Hz as claimed.
+- **Priority**: **P3**
+- **Follow-up**:
+  - Treat as tuning; re-evaluate `IDLE_LOOP_BACKOFF` via profiling data.
+
+### 34) Non-sequential block-index divergence / out-of-bounds claim
+- **Status**: **Not accurate (current tree)**
+- **Evidence**:
+  - `upsert_turn_block` pads missing indices before insert/update, preventing
+    direct out-of-bounds writes in normal flow.
+  - Runtime block-text tracking uses index-keyed map and tolerates sparse keys.
+- **Priority**: **N/A**
+
+### 35) `src/runtime.rs` + `src/runtime/mod.rs` dual-entry claim
+- **Status**: **Not accurate (current tree)**
+- **Evidence**:
+  - Repository has `src/runtime.rs` and `src/runtime/*` children.
+  - `src/runtime/mod.rs` does not exist.
+- **Priority**: **N/A**
+
 ## Immediate Dispatch Recommendation
 
 1. Keep P0 items 1–4 and P0.17 closed.
-2. Address P1.18, P1.19, and P1.26 (input bounds + parse-error surfacing + SSE buffer cap).
-3. Treat items 21, 23, 27, and 30 as closed (`not accurate`), no implementation work.
-4. Keep items 22, 24, 25, and 28 as P2 design/observability follow-ups.
-5. Keep item 29 as a P3 performance optimization candidate.
+2. Address P1.18, P1.19, P1.26, and P1.31.
+3. Treat items 21, 23, 27, 30, 34, and 35 as closed (`not accurate`).
+4. Keep items 22, 24, 25, 28, and 32 as P2 design/observability follow-ups.
+5. Keep items 29 and 33 as P3 optimization/tuning candidates.
 6. Continue P2/P3 refactors in ADR-backed, test-gated batches.
 
 ## Validation Commands
