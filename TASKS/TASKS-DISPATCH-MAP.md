@@ -9,6 +9,7 @@ Uncompleted dispatch ADRs live in `TASKS/` root.
 
 1. `TASKS/ADR-013-tui-completion-deployment-plan.md`
 2. `TASKS/ADR-018-managed-tui-scrollback-streaming-cell-overlays.md`
+3. `TASKS/ADR-021-codebase-audit-dead-weight-duplication-shared-code-opportunities.md`
 
 ## Manifests Added In This Wave (6 Files)
 
