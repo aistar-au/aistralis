@@ -128,43 +128,58 @@ bash scripts/check_forbidden_imports.sh
 
 ```
 vexcoder/
-├── CONTRIBUTING.md                # This file — TDM law
-├── docs/
-│   ├── book.toml                  # mdBook configuration (Pages source)
-│   └── src/                       # mdBook content only
-├── TASKS/                         # Dispatch manifests and work orders (what + anchor)
-│   ├── ADR-README.md              # ADR index and status tracking
-│   ├── ADR-013-tui-completion-deployment-plan.md
-│   ├── ADR-018-managed-tui-scrollback-streaming-cell-overlays.md
-│   ├── ADR-019-adr-018-follow-up-correctness-cutover-cleanup.md
-│   ├── manifest-strategy.md       # TDM operational guide (how)
-│   ├── CRIT-01-protocol.md
-│   ├── CORE-01-sse-parser.md
-│   ├── SEC-01-path-security.md
-│   └── completed/
-├── src/
-│   ├── api.rs                     # Top-level entry for api module
-│   ├── api/                       # HTTP client, stream parser, mock
-│   ├── app.rs                     # Top-level entry for app module
-│   ├── app/                       # TUI mode + frontend wiring to runtime core
-│   ├── config.rs                  # Top-level entry for config module
-│   ├── config/                    # Environment variable loading
-│   ├── edit_diff/                 # LCS-based diff renderer
-│   ├── runtime.rs                 # Top-level entry for runtime module
-│   ├── runtime/                   # Canonical runtime loop, mode traits, updates
-│   ├── state.rs                   # Top-level entry for state module
-│   ├── state/                     # ConversationManager, message history
-│   ├── terminal.rs                # Top-level entry for terminal module
-│   ├── terminal/                  # ratatui/crossterm setup (TUI skeleton)
-│   ├── tools.rs                   # Top-level entry for tools module
-│   ├── tools/                     # ToolExecutor — filesystem + git
-│   ├── types.rs                   # Top-level entry for types module
-│   ├── types/                     # ApiMessage, Content, StreamEvent
-│   ├── ui.rs                      # Top-level entry for ui module
-│   ├── ui/                        # ratatui render functions
-│   └── util.rs                    # Top-level entry for util helpers
+├── CONTRIBUTING.md                # Workflow guide + source map
+├── README.md                      # Runtime and quickstart
+├── docs/                          # mdBook docs for GitHub Pages
+├── TASKS/                         # ADRs and task manifests (open + completed)
+├── src/                           # Rust crate source
+│   └── bin/vex.rs                 # Binary entrypoint
 └── tests/                         # Integration tests
 ```
+
+---
+
+## 🦀 Tracked Rust Source Map (`*.rs`)
+
+| File | Short description (with raw URL) |
+| :--- | :--- |
+| `src/lib.rs` | Crate root exporting runtime/app/api/state/tools/ui modules. Raw: <https://raw.githubusercontent.com/aistar-au/vexcoder/main/src/lib.rs> |
+| `src/bin/vex.rs` | Production binary entrypoint and managed TUI startup loop. Raw: <https://raw.githubusercontent.com/aistar-au/vexcoder/main/src/bin/vex.rs> |
+| `src/api.rs` | API module entry and re-exports. Raw: <https://raw.githubusercontent.com/aistar-au/vexcoder/main/src/api.rs> |
+| `src/api/client.rs` | HTTP client, protocol selection, request/stream setup, tool schemas. Raw: <https://raw.githubusercontent.com/aistar-au/vexcoder/main/src/api/client.rs> |
+| `src/api/logging.rs` | Shared API debug/error logger and env-based log path handling. Raw: <https://raw.githubusercontent.com/aistar-au/vexcoder/main/src/api/logging.rs> |
+| `src/api/mock_client.rs` | Mock streaming client used by tests. Raw: <https://raw.githubusercontent.com/aistar-au/vexcoder/main/src/api/mock_client.rs> |
+| `src/api/stream.rs` | Stream/SSE event parsing helpers used by API layer. Raw: <https://raw.githubusercontent.com/aistar-au/vexcoder/main/src/api/stream.rs> |
+| `src/app.rs` | TUI mode state machine: input, overlays, history, and UI event handling. Raw: <https://raw.githubusercontent.com/aistar-au/vexcoder/main/src/app.rs> |
+| `src/config.rs` | Config loading/validation from environment variables. Raw: <https://raw.githubusercontent.com/aistar-au/vexcoder/main/src/config.rs> |
+| `src/edit_diff.rs` | Edit preview diff/hunk formatting utilities. Raw: <https://raw.githubusercontent.com/aistar-au/vexcoder/main/src/edit_diff.rs> |
+| `src/runtime.rs` | Runtime module entry and re-exports. Raw: <https://raw.githubusercontent.com/aistar-au/vexcoder/main/src/runtime.rs> |
+| `src/runtime/context.rs` | Async turn execution context and conversation update forwarding. Raw: <https://raw.githubusercontent.com/aistar-au/vexcoder/main/src/runtime/context.rs> |
+| `src/runtime/frontend.rs` | Frontend adapter contracts and runtime-facing input event types. Raw: <https://raw.githubusercontent.com/aistar-au/vexcoder/main/src/runtime/frontend.rs> |
+| `src/runtime/loop.rs` | Runtime event loop orchestration between mode, frontend, and context. Raw: <https://raw.githubusercontent.com/aistar-au/vexcoder/main/src/runtime/loop.rs> |
+| `src/runtime/mode.rs` | Runtime mode trait defining input/update hooks. Raw: <https://raw.githubusercontent.com/aistar-au/vexcoder/main/src/runtime/mode.rs> |
+| `src/runtime/policy.rs` | Output sanitization and tool-evidence policy helpers. Raw: <https://raw.githubusercontent.com/aistar-au/vexcoder/main/src/runtime/policy.rs> |
+| `src/runtime/update.rs` | `UiUpdate` message types emitted from runtime to frontend. Raw: <https://raw.githubusercontent.com/aistar-au/vexcoder/main/src/runtime/update.rs> |
+| `src/state.rs` | State module entry and re-exports. Raw: <https://raw.githubusercontent.com/aistar-au/vexcoder/main/src/state.rs> |
+| `src/state/conversation.rs` | Core conversation loop: streaming parse, tool execution, approvals, pruning. Raw: <https://raw.githubusercontent.com/aistar-au/vexcoder/main/src/state/conversation.rs> |
+| `src/state/stream_block.rs` | Structured stream block models and tool status enum. Raw: <https://raw.githubusercontent.com/aistar-au/vexcoder/main/src/state/stream_block.rs> |
+| `src/terminal.rs` | Terminal raw-mode lifecycle and panic-safe restore guard. Raw: <https://raw.githubusercontent.com/aistar-au/vexcoder/main/src/terminal.rs> |
+| `src/test_support.rs` | Shared test synchronization helpers (e.g., env lock). Raw: <https://raw.githubusercontent.com/aistar-au/vexcoder/main/src/test_support.rs> |
+| `src/tool_preview.rs` | Tool approval preview rendering and read-file snapshot summaries. Raw: <https://raw.githubusercontent.com/aistar-au/vexcoder/main/src/tool_preview.rs> |
+| `src/tools.rs` | Tools module entry and re-exports. Raw: <https://raw.githubusercontent.com/aistar-au/vexcoder/main/src/tools.rs> |
+| `src/tools/operator.rs` | Sandboxed file/git tool operator with path safety and literal search. Raw: <https://raw.githubusercontent.com/aistar-au/vexcoder/main/src/tools/operator.rs> |
+| `src/types.rs` | Types module entry and re-exports. Raw: <https://raw.githubusercontent.com/aistar-au/vexcoder/main/src/types.rs> |
+| `src/types/api_types.rs` | API request/response content and streaming event structs/enums. Raw: <https://raw.githubusercontent.com/aistar-au/vexcoder/main/src/types/api_types.rs> |
+| `src/ui.rs` | UI module entry and re-exports. Raw: <https://raw.githubusercontent.com/aistar-au/vexcoder/main/src/ui.rs> |
+| `src/ui/input_metrics.rs` | Input editor row/width metrics for viewport-safe rendering. Raw: <https://raw.githubusercontent.com/aistar-au/vexcoder/main/src/ui/input_metrics.rs> |
+| `src/ui/layout.rs` | Ratatui pane layout splitting and geometry helpers. Raw: <https://raw.githubusercontent.com/aistar-au/vexcoder/main/src/ui/layout.rs> |
+| `src/ui/render.rs` | Ratatui render functions for status, history, input, and overlays. Raw: <https://raw.githubusercontent.com/aistar-au/vexcoder/main/src/ui/render.rs> |
+| `src/util.rs` | Shared utility functions (bool/env parsing and endpoint helpers). Raw: <https://raw.githubusercontent.com/aistar-au/vexcoder/main/src/util.rs> |
+| `tests/integration_test.rs` | Integration tests for config validation behavior. Raw: <https://raw.githubusercontent.com/aistar-au/vexcoder/main/tests/integration_test.rs> |
+| `tests/stream_parser_tests.rs` | Stream parser protocol and fragmentation tests. Raw: <https://raw.githubusercontent.com/aistar-au/vexcoder/main/tests/stream_parser_tests.rs> |
+| `tests/tool_operator_tests.rs` | Tool operator behavior/security tests for file and git actions. Raw: <https://raw.githubusercontent.com/aistar-au/vexcoder/main/tests/tool_operator_tests.rs> |
+
+`src/calculator.rs` is currently untracked and intentionally excluded from the tracked repo map above.
 
 ---
 
@@ -172,4 +187,3 @@ vexcoder/
 
 - [ADR index](TASKS/ADR-README.md) — architectural decisions and their rationale
 - [Agentic Repair Strategy](TASKS/manifest-strategy.md) — TDM workflow deep-dive
-- [SECURITY.md](SECURITY.md) — vulnerability reporting
