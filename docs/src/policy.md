@@ -1,6 +1,7 @@
 # Documentation Policy
 
 `docs/` is reserved for mdBook/GitHub Pages content.
+Documentation language is English only (`en`).
 
 - Required structure:
   - `docs/book.toml`

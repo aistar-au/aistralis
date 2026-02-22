@@ -3,7 +3,6 @@ title = "vexcoder Documentation"
 description = "Operational and user documentation for vexcoder."
 authors = ["vexcoder maintainers"]
 language = "en"
-multilingual = false
 src = "src"
 
 [output.html]
