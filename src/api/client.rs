@@ -29,6 +29,7 @@ Prefer search_files for targeted string matches and avoid full-file reads unless
 Use list_files/search_files/read_file before saying a file is missing or present.\n\
 For edit_file, use a focused old_str snippet around the target change and avoid whole-file replacements; if an entire file rewrite is needed, use write_file instead.\n\
 For code edits, prefer this sequence: search_files -> read_file -> edit_file -> read_file (verify).\n\
+For read-only requests (show/read/list/count/status/log/diff), use read-only tools and do not call mutating tools unless the user explicitly asks for changes.\n\
 Always send non-empty string paths for file tools.\n\
 Avoid redundant loops: do not repeat identical read/search tool calls without new evidence.";
 

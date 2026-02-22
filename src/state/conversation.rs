@@ -563,6 +563,46 @@ impl ConversationManager {
                         continue;
                     }
 
+                    if let Some(read_only_guard) =
+                        mutating_tool_read_only_conflict_prompt(&original_user_input, &name)
+                    {
+                        if use_structured_blocks {
+                            self.set_tool_call_status(&id, ToolStatus::Cancelled, stream_delta_tx);
+                            self.push_tool_result_block(
+                                StreamBlock::ToolResult {
+                                    tool_call_id: id.clone(),
+                                    output: read_only_guard.clone(),
+                                    is_error: true,
+                                },
+                                stream_delta_tx,
+                            );
+                        } else if stream_local_tool_events {
+                            emit_text_update(
+                                stream_delta_tx,
+                                format!("\n- [tool_error] {name}: {read_only_guard}\n"),
+                            );
+                        }
+                        emit_text_update(stream_delta_tx, read_only_guard.clone());
+                        let history_content = truncate_for_history(
+                            &read_only_guard,
+                            limits.max_tool_result_history_chars,
+                        );
+                        if use_structured_round {
+                            tool_result_blocks.push(ContentBlock::ToolResult {
+                                tool_use_id: id,
+                                content: history_content,
+                                is_error: true,
+                            });
+                        } else {
+                            let rendered = format!("tool_error {name}:\n{history_content}");
+                            text_protocol_tool_results.push(truncate_for_history(
+                                &rendered,
+                                limits.max_tool_result_history_chars,
+                            ));
+                        }
+                        continue;
+                    }
+
                     let tool_requires_approval =
                         require_tool_approval || tool_requires_confirmation(&name);
 
@@ -1491,6 +1531,62 @@ fn missing_mutating_location_prompt(name: &str, input: &serde_json::Value) -> Op
     }
 }
 
+fn is_read_only_user_request(input: &str) -> bool {
+    const READ_ONLY_HINTS: [&str; 15] = [
+        "show",
+        "read",
+        "list",
+        "count",
+        "how many",
+        "what is in",
+        "what's in",
+        "whats in",
+        "content of",
+        "status",
+        "diff",
+        "log",
+        "cat",
+        "display",
+        "print",
+    ];
+    const MUTATING_HINTS: [&str; 18] = [
+        "write",
+        "edit",
+        "update",
+        "create",
+        "add",
+        "delete",
+        "remove",
+        "rename",
+        "move",
+        "commit",
+        "stage",
+        "patch",
+        "apply",
+        "implement",
+        "refactor",
+        "fix",
+        "push",
+        "rebase",
+    ];
+
+    let normalized = input.to_ascii_lowercase();
+    let has_read_only_hint = READ_ONLY_HINTS.iter().any(|hint| normalized.contains(hint));
+    let has_mutating_hint = MUTATING_HINTS.iter().any(|hint| normalized.contains(hint));
+
+    has_read_only_hint && !has_mutating_hint
+}
+
+fn mutating_tool_read_only_conflict_prompt(user_input: &str, tool_name: &str) -> Option<String> {
+    if !tool_requires_confirmation(tool_name) || !is_read_only_user_request(user_input) {
+        return None;
+    }
+
+    Some(format!(
+        "Blocked mutating tool call `{tool_name}` because this request appears read-only. Use read-only tools (`read_file`, `search_files`, `list_files`, `git_status`, `git_diff`, `git_log`, `git_show`) and answer from those results. No file changes were made."
+    ))
+}
+
 fn text_stats(text: &str) -> (usize, usize) {
     (
         text.chars().count(),
@@ -2256,6 +2352,30 @@ cal.js
     }
 
     #[test]
+    fn test_read_only_user_request_detection_and_mutating_guard() {
+        assert!(is_read_only_user_request("show me calculator.rs"));
+        assert!(is_read_only_user_request("what is in src/runtime/loop.rs"));
+        assert!(!is_read_only_user_request(
+            "add a new function and commit it"
+        ));
+
+        let guard = mutating_tool_read_only_conflict_prompt("show the git diff", "write_file");
+        assert!(
+            guard.is_some(),
+            "mutating call should be blocked for read-only request"
+        );
+        assert!(
+            guard.unwrap().contains("No file changes were made"),
+            "guard copy should be explicit about mutation safety"
+        );
+
+        assert!(
+            mutating_tool_read_only_conflict_prompt("add calculator.rs", "write_file").is_none(),
+            "explicit mutating intent should not be blocked"
+        );
+    }
+
+    #[test]
     fn test_env_bool_off_is_false_across_state_paths() {
         let _env_lock = crate::test_support::ENV_LOCK.blocking_lock();
         std::env::set_var("VEX_STREAM_LOCAL_TOOL_EVENTS", "off");
@@ -2754,6 +2874,82 @@ data: {"type":"message_stop"}"#.to_string(),
         } else {
             panic!("expected tool_result blocks");
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_read_only_request_blocks_mutating_tool_without_approval_prompt() -> Result<()> {
+        let _env_lock = crate::test_support::ENV_LOCK.lock().await;
+        std::env::set_var("VEX_TOOL_CONFIRM", "off");
+
+        let first_response_sse = vec![
+            r#"event: message_start
+data: {"type":"message_start","message":{"id":"msg_readonly_guard_01","type":"message","role":"assistant","model":"mock-model","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}"#.to_string(),
+            r#"event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_readonly_guard_01","name":"write_file","input":{"path":"calculator.rs","content":"fn main() {}\n"}}}"#.to_string(),
+            r#"event: content_block_stop
+data: {"type":"content_block_stop","index":0}"#.to_string(),
+            r#"event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":5}}"#.to_string(),
+            r#"event: message_stop
+data: {"type":"message_stop"}"#.to_string(),
+        ];
+        let second_response_sse = plain_text_round(
+            "msg_readonly_guard_02",
+            "Read-only request handled without file mutation.",
+        );
+        let mock_api_client =
+            ApiClient::new_mock(Arc::new(crate::api::mock_client::MockApiClient::new(vec![
+                first_response_sse,
+                second_response_sse,
+            ])));
+        let mut manager = ConversationManager::new_mock(mock_api_client, HashMap::new());
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let approval_task = tokio::spawn(async move {
+            let mut saw_approval_request = false;
+            while let Some(update) = rx.recv().await {
+                if matches!(update, ConversationStreamUpdate::ToolApprovalRequest(_)) {
+                    saw_approval_request = true;
+                }
+            }
+            saw_approval_request
+        });
+        let final_text = manager
+            .send_message("show me calculator.rs".to_string(), Some(&tx))
+            .await?;
+        drop(tx);
+        let saw_approval_request = approval_task.await?;
+        std::env::remove_var("VEX_TOOL_CONFIRM");
+
+        assert!(
+            !saw_approval_request,
+            "read-only request guard should block mutating tool before approval overlay"
+        );
+        assert!(final_text.contains("Read-only request handled"));
+
+        let tool_result_message = manager
+            .api_messages
+            .iter()
+            .find(|message| {
+                message.role == "user"
+                    && matches!(message.content, Content::Blocks(_))
+                    && message_contains_tool_result(message)
+            })
+            .expect("expected tool_result message in history");
+        if let Content::Blocks(blocks) = &tool_result_message.content {
+            assert!(blocks.iter().any(|block| matches!(
+                block,
+                ContentBlock::ToolResult {
+                    tool_use_id,
+                    content,
+                    is_error: true,
+                } if tool_use_id == "toolu_readonly_guard_01" && content.contains("appears read-only")
+            )));
+        } else {
+            panic!("expected tool_result blocks");
+        }
+
         Ok(())
     }
 

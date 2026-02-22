@@ -99,6 +99,21 @@ explicit regression tests.
   - History pruning remains bounded in long tool-loop sessions.
   - Regression tests were added for each bug to prevent reintroduction.
 
+### Read-only Intent Guard Follow-up (2026-02-22)
+- Dispatcher: codex-gpt5
+- Commit: pending (pre-commit review requested)
+- Files changed:
+  - `src/state/conversation.rs` (+196 -0)
+  - `src/api/client.rs` (+1 -0)
+- Validation:
+  - `cargo test --all-targets` : pass
+  - `cargo clippy --all-targets -- -D warnings` : pass
+- Notes:
+  - Added a runtime guard that blocks mutating tools (`write_file`, `edit_file`, `rename_file`, `git_add`, `git_commit`) when the current user request is read-only in intent (show/read/list/status/log/diff style prompts).
+  - Guarded calls are cancelled with explicit “No file changes were made” tool-result text before approval overlay is shown.
+  - Added regression tests for read-only intent detection and for preventing approval-overlay churn when a model attempts `write_file` on a read-only request.
+  - Strengthened API system prompt instructions to keep read-only requests on read-only tool paths unless the user explicitly asks for changes.
+
 ## External Review Notes (verbatim)
 
 **Thanks for sharing the full `CONTRIBUTING.md` + source map!**  
