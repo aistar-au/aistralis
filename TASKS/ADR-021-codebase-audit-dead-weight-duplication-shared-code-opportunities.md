@@ -164,14 +164,35 @@ current tree.
   - This was a historical issue reflected in older review text, now resolved.
 
 ### 17) Unconditional redraw loop / hot idle rendering
-- **Status**: **Confirmed**
+- **Status**: **Completed (2026-02-22)**
 - **Evidence**:
-  - `src/runtime/loop.rs` calls `frontend.render(&self.mode)` every iteration.
-  - `src/bin/vex.rs` polls input at fixed cadence (`event::poll(16ms)`), so
-    render is still called repeatedly even when state is unchanged.
+  - Added runtime render scheduling controls:
+    - `IDLE_RENDER_TICK` at `src/runtime/loop.rs:12`
+    - `IDLE_LOOP_BACKOFF` at `src/runtime/loop.rs:13`
+  - Updated `Runtime::run` to render only when first frame, state change, or
+    tick due (`src/runtime/loop.rs:24`, `src/runtime/loop.rs:35`,
+    `src/runtime/loop.rs:46`, `src/runtime/loop.rs:48`).
+  - Added idle-regression test:
+    `test_render_is_tick_or_state_driven_when_idle`
+    (`src/runtime/loop.rs:242`).
 - **Priority**: **P0**
-- **Follow-up**:
-  - Implement dirty/tick-aware render guard in runtime/frontend path.
+- **Implementation (short)**:
+  - Replaced unconditional per-iteration draw with tick/state-driven draw and
+    idle backoff sleep to avoid hot idle redraw loops while preserving first
+    frame + responsive updates.
+
+### 17.a) P0.17 Delta (Insertions/Deletions)
+
+Measured with:
+
+```bash
+git diff --numstat -- src/runtime/loop.rs
+```
+
+| File | Insertions | Deletions |
+| :--- | ---: | ---: |
+| `src/runtime/loop.rs` | 80 | 9 |
+| **Total** | **80** | **9** |
 
 ### 18) Unbounded input buffer in production editor
 - **Status**: **Confirmed**
@@ -318,7 +339,7 @@ current tree.
 
 ## Immediate Dispatch Recommendation
 
-1. Keep P0 items 1–4 closed and add P0.17 (dirty/tick-aware render scheduling).
+1. Keep P0 items 1–4 and P0.17 closed.
 2. Address P1.18, P1.19, and P1.26 (input bounds + parse-error surfacing + SSE buffer cap).
 3. Treat items 21, 23, 27, and 30 as closed (`not accurate`), no implementation work.
 4. Keep items 22, 24, 25, and 28 as P2 design/observability follow-ups.

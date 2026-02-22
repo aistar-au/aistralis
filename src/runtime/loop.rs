@@ -1,5 +1,6 @@
 use crate::runtime::{frontend::FrontendAdapter, mode::RuntimeMode, UiUpdate};
 use tokio::sync::mpsc;
+use tokio::time::{sleep, Duration, Instant};
 
 use super::context::RuntimeContext;
 
@@ -7,6 +8,9 @@ pub struct Runtime<M: RuntimeMode> {
     pub mode: M,
     update_rx: mpsc::UnboundedReceiver<UiUpdate>,
 }
+
+const IDLE_RENDER_TICK: Duration = Duration::from_millis(120);
+const IDLE_LOOP_BACKOFF: Duration = Duration::from_millis(4);
 
 impl<M: RuntimeMode> Runtime<M> {
     pub fn new(mode: M, update_rx: mpsc::UnboundedReceiver<UiUpdate>) -> Self {
@@ -21,20 +25,33 @@ impl<M: RuntimeMode> Runtime<M> {
     where
         F: FrontendAdapter<M>,
     {
+        let mut last_render_at = Instant::now();
+        let mut first_render_pending = true;
         loop {
             if frontend.should_quit() {
                 break;
             }
 
+            let mut state_changed = false;
             if let Some(input) = frontend.poll_user_input(&self.mode) {
+                state_changed = true;
                 self.mode.on_frontend_event(input, ctx);
             }
 
             while let Ok(update) = self.update_rx.try_recv() {
+                state_changed = true;
                 self.mode.on_model_update(update, ctx);
             }
 
-            frontend.render(&self.mode);
+            let now = Instant::now();
+            let tick_due = now.saturating_duration_since(last_render_at) >= IDLE_RENDER_TICK;
+            if first_render_pending || state_changed || tick_due {
+                frontend.render(&self.mode);
+                last_render_at = now;
+                first_render_pending = false;
+            } else {
+                sleep(IDLE_LOOP_BACKOFF).await;
+            }
         }
     }
 }
@@ -51,15 +68,15 @@ mod tests {
     struct HeadlessFrontend {
         inputs: VecDeque<String>,
         render_count: usize,
-        quit_after: usize,
+        quit_after_renders: usize,
     }
 
     impl HeadlessFrontend {
-        fn new(inputs: Vec<&str>, quit_after: usize) -> Self {
+        fn new(inputs: Vec<&str>, quit_after_renders: usize) -> Self {
             Self {
                 inputs: inputs.into_iter().map(|s| s.to_string()).collect(),
                 render_count: 0,
-                quit_after,
+                quit_after_renders,
             }
         }
     }
@@ -74,7 +91,7 @@ mod tests {
         }
 
         fn should_quit(&self) -> bool {
-            self.render_count >= self.quit_after
+            self.render_count >= self.quit_after_renders
         }
     }
 
@@ -102,15 +119,15 @@ mod tests {
     struct InterruptFrontend {
         events: VecDeque<UserInputEvent>,
         render_count: usize,
-        quit_after: usize,
+        quit_after_renders: usize,
     }
 
     impl InterruptFrontend {
-        fn new(events: Vec<UserInputEvent>, quit_after: usize) -> Self {
+        fn new(events: Vec<UserInputEvent>, quit_after_renders: usize) -> Self {
             Self {
                 events: events.into_iter().collect(),
                 render_count: 0,
-                quit_after,
+                quit_after_renders,
             }
         }
     }
@@ -125,7 +142,37 @@ mod tests {
         }
 
         fn should_quit(&self) -> bool {
-            self.render_count >= self.quit_after
+            self.render_count >= self.quit_after_renders
+        }
+    }
+
+    struct IdleFrontend {
+        render_count: usize,
+        start: Instant,
+        runtime: Duration,
+    }
+
+    impl IdleFrontend {
+        fn new(runtime: Duration) -> Self {
+            Self {
+                render_count: 0,
+                start: Instant::now(),
+                runtime,
+            }
+        }
+    }
+
+    impl FrontendAdapter<InterruptMode> for IdleFrontend {
+        fn poll_user_input(&mut self, _mode: &InterruptMode) -> Option<UserInputEvent> {
+            None
+        }
+
+        fn render(&mut self, _mode: &InterruptMode) {
+            self.render_count += 1;
+        }
+
+        fn should_quit(&self) -> bool {
+            self.start.elapsed() >= self.runtime
         }
     }
 
@@ -189,5 +236,29 @@ mod tests {
 
         assert_eq!(runtime.mode.interrupt_calls, 1);
         assert_eq!(runtime.mode.user_input_calls, 0);
+    }
+
+    #[tokio::test]
+    async fn test_render_is_tick_or_state_driven_when_idle() {
+        let mock = Arc::new(MockApiClient::new(vec![]));
+        let client = ApiClient::new_mock(mock);
+        let conversation = ConversationManager::new_mock(client, HashMap::new());
+
+        let (tx, update_rx) = mpsc::unbounded_channel::<UiUpdate>();
+        let mut ctx =
+            RuntimeContext::new(conversation, tx, tokio_util::sync::CancellationToken::new());
+        let mode = InterruptMode {
+            user_input_calls: 0,
+            interrupt_calls: 0,
+        };
+        let mut runtime = Runtime::new(mode, update_rx);
+
+        let mut frontend = IdleFrontend::new(Duration::from_millis(180));
+        runtime.run(&mut frontend, &mut ctx).await;
+
+        assert!(
+            frontend.render_count <= 3,
+            "idle render count should remain bounded by tick-driven scheduling"
+        );
     }
 }
