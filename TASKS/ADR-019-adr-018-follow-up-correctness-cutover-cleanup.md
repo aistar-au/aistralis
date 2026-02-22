@@ -204,6 +204,46 @@ for the exact commit that closes the checklist item.
 - Notes:
   - Removed unused `runtime::event` module that was compile-shape-only and not on production path.
 
+### API Logging Follow-up - Consolidate API debug/error emission
+- Dispatcher: codex-gpt5
+- Commit: pending (pre-commit review requested)
+- Files changed:
+  - `src/api/logging.rs` (+100 -0)
+  - `src/api.rs` (+1 -0)
+  - `src/api/client.rs` (+1 -39)
+  - `src/api/stream.rs` (+5 -5)
+- Line references:
+  - `src/api/logging.rs:7`
+  - `src/api/logging.rs:21`
+  - `src/api/logging.rs:43`
+  - `src/api/client.rs:1`
+  - `src/api/client.rs:159`
+  - `src/api/stream.rs:108`
+- Validation:
+  - `cargo test --all-targets` : pass
+  - `cargo clippy --all-targets -- -D warnings` : pass
+  - `./scripts/check_forbidden_imports.sh` : pass
+  - `./scripts/check_no_alternate_routing.sh` : pass
+- Notes:
+  - Replaced ad-hoc `eprintln!` paths with shared `api::logging` utility for both payload debug and SSE parse-error reporting.
+  - Standardized output formatting and sink resolution with a global `VEX_API_LOG_PATH` override and fallback compatibility for `VEX_DEBUG_PAYLOAD_PATH`.
+
+### Dead-Code Follow-up - Remove unused legacy `src/main.rs`
+- Dispatcher: codex-gpt5
+- Commit: pending (pre-commit review requested)
+- Files changed:
+  - `src/main.rs` (+0 -141)
+- Line references:
+  - `Cargo.toml:5`
+  - `Cargo.toml:9`
+  - `src/main.rs` (removed)
+- Validation:
+  - `cargo test --all-targets` : pass
+  - `cargo clippy --all-targets -- -D warnings` : pass
+- Notes:
+  - Removed dead legacy calculator program that was not part of any compiled target.
+  - `autobins = false` with explicit `[[bin]] path = "src/bin/vex.rs"` remains the only binary build path.
+
 ## Gating rules
 
 1. Phase 2 cannot start before U4 + D1 are merged and green.

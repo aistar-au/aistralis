@@ -1,3 +1,4 @@
+use super::logging::emit_sse_parse_error;
 use crate::types::{ContentBlock, Delta, StreamEvent};
 use anyhow::Result;
 use serde::Deserialize;
@@ -104,12 +105,11 @@ impl StreamParser {
                             if let Some(openai_events) = self.parse_openai_chunk(&json_data) {
                                 events.extend(openai_events);
                             } else {
-                                eprintln!("⚠️  SSE parse error: {}", anthropic_error);
-                                eprintln!(
-                                    "   Event type: {}",
-                                    event_type.as_deref().unwrap_or("<none>")
+                                emit_sse_parse_error(
+                                    event_type.as_deref(),
+                                    &json_data,
+                                    &anthropic_error,
                                 );
-                                eprintln!("   Data: {}", json_data);
                             }
                         }
                     }

@@ -1,3 +1,4 @@
+use super::logging::{debug_payload_enabled, emit_debug_payload};
 use crate::config::Config;
 use crate::types::{ApiMessage, Content, ContentBlock};
 use crate::util::{is_local_endpoint_url, parse_bool_flag};
@@ -6,14 +7,11 @@ use bytes::Bytes;
 use futures::{Stream, StreamExt};
 use serde_json::json;
 use serde_json::Value;
-use std::fs::OpenOptions;
-use std::io::{IsTerminal, Write};
 use std::pin::Pin;
 #[cfg(test)]
 use std::sync::Arc;
 
 pub type ByteStream = Pin<Box<dyn Stream<Item = Result<Bytes>> + Send>>;
-const DEFAULT_DEBUG_PAYLOAD_LOG_PATH: &str = "/tmp/vex-debug-payload.log";
 const SYSTEM_PROMPT: &str = "You are a coding assistant.\n\
 Use tools for all filesystem facts and changes.\n\
 When a user asks for repository facts, command output, file content, or code edits, call tools instead of guessing.\n\
@@ -220,42 +218,6 @@ fn resolve_max_tokens(api_url: &str) -> u32 {
     } else {
         4096
     }
-}
-
-fn debug_payload_enabled() -> bool {
-    std::env::var("VEX_DEBUG_PAYLOAD")
-        .ok()
-        .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-}
-
-fn debug_payload_log_path() -> String {
-    std::env::var("VEX_DEBUG_PAYLOAD_PATH")
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| DEFAULT_DEBUG_PAYLOAD_LOG_PATH.to_string())
-}
-
-fn emit_debug_payload(request_url: &str, payload: &Value) {
-    let formatted_payload = serde_json::to_string_pretty(payload)
-        .unwrap_or_else(|_| "<payload serialization error>".to_string());
-    let log_entry = format!("VEX_DEBUG_PAYLOAD request to {request_url}:\n{formatted_payload}\n");
-
-    if std::io::stderr().is_terminal() {
-        let path = debug_payload_log_path();
-        let write_result = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .and_then(|mut file| file.write_all(log_entry.as_bytes()));
-
-        if write_result.is_err() {
-            eprintln!("{log_entry}");
-        }
-        return;
-    }
-
-    eprintln!("{log_entry}");
 }
 
 fn parse_protocol(value: String) -> Option<ApiProtocol> {
