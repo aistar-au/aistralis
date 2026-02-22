@@ -149,12 +149,68 @@ bugs in this pass:
 - Add stronger `src/test_support.rs` harness helpers.
 - Move prompt/schema blobs out of `src/api/client.rs` where practical.
 
+## External Audit Follow-up (2026-02-22)
+
+This section triages the externally submitted debugging report against the
+current tree.
+
+### 16) “Runtime not wired after REF-08” in `src/bin/vex.rs`
+- **Status**: **Not accurate (current tree)**
+- **Evidence**:
+  - `src/bin/vex.rs` uses `#[tokio::main]`.
+  - `main` constructs runtime/context via `build_runtime(config)?`.
+  - `runtime.run(&mut frontend, &mut ctx).await` is executed.
+- **Note**:
+  - This was a historical issue reflected in older review text, now resolved.
+
+### 17) Unconditional redraw loop / hot idle rendering
+- **Status**: **Confirmed**
+- **Evidence**:
+  - `src/runtime/loop.rs` calls `frontend.render(&self.mode)` every iteration.
+  - `src/bin/vex.rs` polls input at fixed cadence (`event::poll(16ms)`), so
+    render is still called repeatedly even when state is unchanged.
+- **Priority**: **P0**
+- **Follow-up**:
+  - Implement dirty/tick-aware render guard in runtime/frontend path.
+
+### 18) Unbounded input buffer in production editor
+- **Status**: **Confirmed**
+- **Evidence**:
+  - `src/ui/editor.rs::insert_str` appends without size cap.
+  - Large paste input can grow buffer unbounded.
+- **Priority**: **P1**
+- **Follow-up**:
+  - Add max input length cap (configurable/default bounded).
+
+### 19) SSE parse failures are logged but not surfaced to UI
+- **Status**: **Confirmed**
+- **Evidence**:
+  - `src/api/stream.rs` logs parse failures via `emit_sse_parse_error(...)`.
+  - No parse-error event is emitted into `ConversationStreamUpdate`/`UiUpdate`;
+    UI may only observe a stalled turn.
+- **Priority**: **P1**
+- **Follow-up**:
+  - Add explicit parse-error propagation path to `UiUpdate::Error`.
+
+### 20) `edit_file` race condition (read-modify-write window)
+- **Status**: **Partially accurate**
+- **Evidence**:
+  - `src/tools/operator.rs::edit_file` performs read/validate/write sequence.
+  - A concurrent external writer can race between read and write.
+- **Risk posture**:
+  - Acceptable for current single-user local-agent target, but still a known
+    TOCTOU class risk.
+- **Priority**: **P2**
+- **Follow-up**:
+  - Evaluate optional lock/atomic-write strategy if multi-writer scenarios are
+    in scope.
+
 ## Immediate Dispatch Recommendation
 
-1. Ship P0 items 1–4 first (behavior correctness).
-2. Triage P1 claims 5–8 with corrected scope (5–7 are not current bugs).
-3. Batch P2 dedup items in small PRs with regression tests.
-4. Track P3 as refactor ADRs with explicit acceptance criteria.
+1. Keep P0 items 1–4 closed and add P0.17 (dirty/tick-aware render scheduling).
+2. Address P1.18 and P1.19 (input bounds + parse-error UI surfacing).
+3. Continue P2 dedup/cleanup items in small PRs with regression tests.
+4. Track P3 refactors as separate ADR-backed batches with explicit gates.
 
 ## Validation Commands
 
