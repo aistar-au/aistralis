@@ -2,6 +2,7 @@ use super::logging::{debug_payload_enabled, emit_debug_payload};
 use crate::config::Config;
 use crate::types::{ApiMessage, Content, ContentBlock};
 use crate::util::{is_local_endpoint_url, parse_bool_flag};
+use anyhow::anyhow;
 use anyhow::Result;
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
@@ -152,12 +153,12 @@ impl ApiClient {
 
         let mut request = self
             .http
-            .post(request_url)
+            .post(&request_url)
             .header("content-type", "application/json")
             .json(&payload);
 
         if debug_payload_enabled() {
-            emit_debug_payload(&self.request_url(), &payload);
+            emit_debug_payload(&request_url, &payload);
         }
 
         match self.api_protocol {
@@ -176,9 +177,17 @@ impl ApiClient {
             }
         }
 
-        let response = request.send().await?.error_for_status()?;
+        let response = request
+            .send()
+            .await
+            .map_err(|error| map_api_request_error(error, &request_url))?
+            .error_for_status()
+            .map_err(|error| map_api_request_error(error, &request_url))?;
 
-        let stream = response.bytes_stream().map(|item| item.map_err(Into::into));
+        let request_url_for_stream = request_url.clone();
+        let stream = response.bytes_stream().map(move |item| {
+            item.map_err(|error| map_api_request_error(error, &request_url_for_stream))
+        });
         Ok(Box::pin(stream))
     }
 
@@ -190,6 +199,31 @@ impl ApiClient {
             }
         }
     }
+}
+
+fn map_api_request_error(error: reqwest::Error, request_url: &str) -> anyhow::Error {
+    if error.is_connect() && is_local_endpoint_url(request_url) {
+        return anyhow!(
+            "cannot reach local API endpoint '{}': {}. Start your local server or update ANTHROPIC_API_URL.",
+            request_url,
+            error
+        );
+    }
+    if error.is_connect() {
+        return anyhow!("cannot reach API endpoint '{}': {}", request_url, error);
+    }
+    if error.is_timeout() {
+        return anyhow!("API request to '{}' timed out: {}", request_url, error);
+    }
+    if let Some(status) = error.status() {
+        return anyhow!(
+            "API endpoint '{}' returned HTTP {}: {}",
+            request_url,
+            status,
+            error
+        );
+    }
+    anyhow!("API request to '{}' failed: {}", request_url, error)
 }
 
 fn resolve_structured_tool_protocol(api_url: &str) -> bool {

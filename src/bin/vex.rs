@@ -1,6 +1,7 @@
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use std::time::Duration;
+use ratatui::widgets::Clear;
+use std::time::{Duration, Instant};
 use vexcoder::app::{build_runtime, TuiMode};
 use vexcoder::config::Config;
 use vexcoder::runtime::frontend::{FrontendAdapter, ScrollAction, ScrollTarget, UserInputEvent};
@@ -11,22 +12,105 @@ use vexcoder::ui::render::{
     OverlayModal,
 };
 
+const STARTUP_NOISE_GUARD: Duration = Duration::from_secs(15);
+
+fn has_numbered_transcript_prefix(line: &str) -> bool {
+    let mut saw_digit = false;
+    let mut chars = line.chars().peekable();
+    while let Some(ch) = chars.peek() {
+        if ch.is_ascii_digit() {
+            saw_digit = true;
+            chars.next();
+            continue;
+        }
+        break;
+    }
+    saw_digit && chars.next() == Some(' ') && chars.next() == Some('|') && chars.next() == Some(' ')
+}
+
+fn transcript_signature_hits(text: &str) -> usize {
+    let lower = text.to_ascii_lowercase();
+    let signatures = [
+        "mode:ready approval:",
+        "view:scrolled",
+        "view:following",
+        "running tests/",
+        "target/debug/deps/",
+        "finished `dev` profile",
+        "running `target/debug/vex`",
+        "test result:",
+        "[error] error sending request for url",
+    ];
+    signatures
+        .iter()
+        .filter(|pattern| lower.contains(*pattern))
+        .count()
+}
+
+fn looks_like_terminal_transcript(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    let signature_hits = transcript_signature_hits(trimmed);
+    let numbered_lines = trimmed
+        .lines()
+        .take(64)
+        .filter(|line| has_numbered_transcript_prefix(line))
+        .count();
+
+    signature_hits >= 2 || (signature_hits >= 1 && numbered_lines >= 2)
+}
+
 struct ManagedTuiFrontend {
     terminal: terminal::TerminalType,
     quit: bool,
     input_buffer: String,
     cursor: usize,
+    started_at: Instant,
 }
 
 impl ManagedTuiFrontend {
     fn new() -> Result<Self> {
         let terminal = terminal::setup()?;
+        Self::drain_startup_events();
         Ok(Self {
             terminal,
             quit: false,
             input_buffer: String::new(),
             cursor: 0,
+            started_at: Instant::now(),
         })
+    }
+
+    fn drain_startup_events() {
+        for _ in 0..1024 {
+            match event::poll(Duration::from_millis(0)) {
+                Ok(true) => {
+                    if event::read().is_err() {
+                        break;
+                    }
+                }
+                Ok(false) | Err(_) => break,
+            }
+        }
+    }
+
+    fn should_ignore_startup_paste(&self, text: &str) -> bool {
+        if text.contains('\u{1b}') || looks_like_terminal_transcript(text) {
+            return true;
+        }
+
+        if self.started_at.elapsed() > STARTUP_NOISE_GUARD {
+            return false;
+        }
+
+        text.lines().take(64).count() > 12
+    }
+
+    fn should_ignore_startup_submission(&self, text: &str) -> bool {
+        self.started_at.elapsed() <= STARTUP_NOISE_GUARD && looks_like_terminal_transcript(text)
     }
 
     fn clamp_cursor_to_boundary_left(&self, mut idx: usize) -> usize {
@@ -89,6 +173,11 @@ impl ManagedTuiFrontend {
     fn submit_input(&mut self) -> Option<String> {
         let value = self.input_buffer.trim().to_string();
         if value.is_empty() {
+            return None;
+        }
+        if self.should_ignore_startup_submission(&value) {
+            self.input_buffer.clear();
+            self.cursor = 0;
             return None;
         }
         self.input_buffer.clear();
@@ -266,6 +355,9 @@ impl FrontendAdapter<TuiMode> for ManagedTuiFrontend {
                         Some(UserInputEvent::Text(trimmed.to_string()))
                     }
                 } else {
+                    if self.should_ignore_startup_paste(&text) {
+                        return None;
+                    }
                     self.insert_str(&text);
                     None
                 }
@@ -282,6 +374,7 @@ impl FrontendAdapter<TuiMode> for ManagedTuiFrontend {
 
         let _ = self.terminal.draw(|frame| {
             let area = frame.area();
+            frame.render_widget(Clear, area);
             let input_width = area.width.saturating_sub(2).max(1) as usize;
             let input_rows = input_visual_rows(input, input_width).max(1) as u16;
             let panes = split_three_pane_layout(area, input_rows);
@@ -328,4 +421,30 @@ async fn main() -> Result<()> {
     let mut frontend = ManagedTuiFrontend::new()?;
     runtime.run(&mut frontend, &mut ctx).await;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::looks_like_terminal_transcript;
+
+    #[test]
+    fn transcript_detection_matches_following_view_dump() {
+        let input =
+            "mode:ready approval:none history:9 view:scrolled\n1 | > list files\ntest result: ok.";
+        assert!(looks_like_terminal_transcript(input));
+    }
+
+    #[test]
+    fn transcript_detection_matches_cargo_test_noise() {
+        let input = "Running tests/integration_test.rs (target/debug/deps/integration_test-b458ef4801b11438)\n\
+                     test result: ok. 2 passed; 0 failed; 0 ignored;\n\
+                     Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.05s";
+        assert!(looks_like_terminal_transcript(input));
+    }
+
+    #[test]
+    fn transcript_detection_keeps_normal_prompt() {
+        let input = "list files in this directory and summarize in one sentence";
+        assert!(!looks_like_terminal_transcript(input));
+    }
 }

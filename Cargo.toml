@@ -9,6 +9,7 @@ name = "vex"
 path = "src/bin/vex.rs"
 
 [dependencies]
+aho-corasick = "1"
 anyhow = "1"
 bytes = "1"
 crossterm = "0.28"

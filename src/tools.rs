@@ -1,3 +1,3 @@
-mod executor;
+mod operator;
 
-pub use executor::ToolExecutor;
+pub use operator::ToolOperator;

@@ -2,7 +2,7 @@ use crossterm::{
     cursor::Show,
     event::{DisableBracketedPaste, EnableBracketedPaste},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode},
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io::{self, Stdout};
@@ -25,15 +25,22 @@ pub fn setup() -> anyhow::Result<TerminalType> {
     install_panic_hook_once();
 
     enable_raw_mode()?;
-    execute!(io::stdout(), EnableBracketedPaste)?;
+    execute!(io::stdout(), EnterAlternateScreen, EnableBracketedPaste)?;
 
     let backend = CrosstermBackend::new(io::stdout());
-    Ok(Terminal::new(backend)?)
+    let mut terminal = Terminal::new(backend)?;
+    terminal.clear()?;
+    Ok(terminal)
 }
 
 pub fn restore() -> anyhow::Result<()> {
     let _ = disable_raw_mode();
-    let _ = execute!(io::stdout(), DisableBracketedPaste, Show);
+    let _ = execute!(
+        io::stdout(),
+        LeaveAlternateScreen,
+        DisableBracketedPaste,
+        Show
+    );
     Ok(())
 }
 

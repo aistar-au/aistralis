@@ -6,7 +6,7 @@ use crate::tool_preview::{
     format_read_file_snapshot_message, preview_tool_input, read_file_path, ReadFileSnapshotCache,
     ReadFileSnapshotSummary, ReadFileSummaryMessageStyle, ToolPreviewStyle,
 };
-use crate::tools::ToolExecutor;
+use crate::tools::ToolOperator;
 use crate::types::{ApiMessage, Content, ContentBlock, StreamEvent};
 use crate::util::parse_bool_flag;
 use anyhow::bail;
@@ -65,36 +65,36 @@ struct HistoryLimits {
 
 pub struct ConversationManager {
     client: Arc<ApiClient>,
-    tool_executor: ToolExecutor,
+    tool_operator: ToolOperator,
     api_messages: Vec<ApiMessage>,
     current_turn_blocks: Vec<StreamBlock>,
     read_file_history_cache: ReadFileSnapshotCache,
     #[cfg(test)]
-    mock_tool_executor_responses: Option<Arc<Mutex<HashMap<String, String>>>>,
+    mock_tool_operator_responses: Option<Arc<Mutex<HashMap<String, String>>>>,
 }
 
 impl ConversationManager {
-    pub fn new(client: ApiClient, executor: ToolExecutor) -> Self {
+    pub fn new(client: ApiClient, operator: ToolOperator) -> Self {
         Self {
             client: Arc::new(client),
-            tool_executor: executor,
+            tool_operator: operator,
             api_messages: Vec::new(),
             current_turn_blocks: Vec::new(),
             read_file_history_cache: ReadFileSnapshotCache::default(),
             #[cfg(test)]
-            mock_tool_executor_responses: None,
+            mock_tool_operator_responses: None,
         }
     }
 
     #[cfg(test)]
-    pub fn new_mock(client: ApiClient, tool_executor_responses: HashMap<String, String>) -> Self {
+    pub fn new_mock(client: ApiClient, tool_operator_responses: HashMap<String, String>) -> Self {
         Self {
             client: Arc::new(client),
-            tool_executor: ToolExecutor::new(std::path::PathBuf::from("/tmp")), // Dummy executor
+            tool_operator: ToolOperator::new(std::path::PathBuf::from("/tmp")), // Dummy executor
             api_messages: Vec::new(),
             current_turn_blocks: Vec::new(),
             read_file_history_cache: ReadFileSnapshotCache::default(),
-            mock_tool_executor_responses: Some(Arc::new(Mutex::new(tool_executor_responses))),
+            mock_tool_operator_responses: Some(Arc::new(Mutex::new(tool_operator_responses))),
         }
     }
 
@@ -644,16 +644,16 @@ impl ConversationManager {
     async fn execute_tool(&self, name: &str, input: &serde_json::Value) -> Result<String> {
         #[cfg(test)]
         {
-            execute_tool_blocking_with_executor(
-                &self.tool_executor,
+            execute_tool_blocking_with_operator(
+                &self.tool_operator,
                 name,
                 input,
-                self.mock_tool_executor_responses.clone(),
+                self.mock_tool_operator_responses.clone(),
             )
         }
         #[cfg(not(test))]
         {
-            execute_tool_blocking_with_executor(&self.tool_executor, name, input)
+            execute_tool_blocking_with_operator(&self.tool_operator, name, input)
         }
     }
 
@@ -666,14 +666,14 @@ impl ConversationManager {
         let tool_name = name.to_string();
         let task_name = tool_name.clone();
         let task_input = input.clone();
-        let task_executor = self.tool_executor.clone();
+        let task_executor = self.tool_operator.clone();
         #[cfg(test)]
-        let task_mock_responses = self.mock_tool_executor_responses.clone();
+        let task_mock_responses = self.mock_tool_operator_responses.clone();
 
         let mut task = tokio::task::spawn_blocking(move || {
             #[cfg(test)]
             {
-                execute_tool_blocking_with_executor(
+                execute_tool_blocking_with_operator(
                     &task_executor,
                     &task_name,
                     &task_input,
@@ -682,7 +682,7 @@ impl ConversationManager {
             }
             #[cfg(not(test))]
             {
-                execute_tool_blocking_with_executor(&task_executor, &task_name, &task_input)
+                execute_tool_blocking_with_operator(&task_executor, &task_name, &task_input)
             }
         });
 
@@ -1026,13 +1026,13 @@ impl ConversationManager {
 }
 
 #[cfg(test)]
-fn execute_tool_blocking_with_executor(
-    tool_executor: &ToolExecutor,
+fn execute_tool_blocking_with_operator(
+    tool_operator: &ToolOperator,
     name: &str,
     input: &serde_json::Value,
-    mock_tool_executor_responses: Option<Arc<Mutex<HashMap<String, String>>>>,
+    mock_tool_operator_responses: Option<Arc<Mutex<HashMap<String, String>>>>,
 ) -> Result<String> {
-    if let Some(responses_arc) = mock_tool_executor_responses {
+    if let Some(responses_arc) = mock_tool_operator_responses {
         let responses = responses_arc.lock().unwrap();
         if name == "read_file" {
             let path = required_tool_string(input, name, "path")?;
@@ -1046,20 +1046,20 @@ fn execute_tool_blocking_with_executor(
         }
     }
 
-    execute_tool_dispatch(tool_executor, name, input)
+    execute_tool_dispatch(tool_operator, name, input)
 }
 
 #[cfg(not(test))]
-fn execute_tool_blocking_with_executor(
-    tool_executor: &ToolExecutor,
+fn execute_tool_blocking_with_operator(
+    tool_operator: &ToolOperator,
     name: &str,
     input: &serde_json::Value,
 ) -> Result<String> {
-    execute_tool_dispatch(tool_executor, name, input)
+    execute_tool_dispatch(tool_operator, name, input)
 }
 
 fn execute_tool_dispatch(
-    tool_executor: &ToolExecutor,
+    tool_operator: &ToolOperator,
     name: &str,
     input: &serde_json::Value,
 ) -> Result<String> {
@@ -1077,47 +1077,47 @@ fn execute_tool_dispatch(
     match name {
         "read_file" => {
             let path = required_tool_string(input, name, "path")?;
-            tool_executor.read_file(path)
+            tool_operator.read_file(path)
         }
         "write_file" => {
             let path = required_tool_string(input, name, "path")?;
-            tool_executor
+            tool_operator
                 .write_file(path, get_str("content"))
                 .map(|_| format!("Successfully wrote to {path}"))
         }
         "edit_file" => {
             let path = required_tool_string(input, name, "path")?;
             let old_str = required_tool_string(input, name, "old_str")?;
-            tool_executor
+            tool_operator
                 .edit_file(path, old_str, get_str("new_str"))
                 .map(|_| format!("Successfully edited {path}"))
         }
         "rename_file" => {
             let old_path = required_tool_string(input, name, "old_path")?;
             let new_path = required_tool_string(input, name, "new_path")?;
-            tool_executor.rename_file(old_path, new_path)
+            tool_operator.rename_file(old_path, new_path)
         }
-        "list_files" | "list_directory" => tool_executor.list_files(
+        "list_files" | "list_directory" => tool_operator.list_files(
             input.get("path").and_then(|v| v.as_str()),
             get_usize("max_entries", 100),
         ),
-        "search_files" | "search" => tool_executor.search_files(
+        "search_files" | "search" => tool_operator.search_files(
             get_str("query"),
             input.get("path").and_then(|v| v.as_str()),
             get_usize("max_results", 30),
         ),
-        "git_status" => tool_executor.git_status(
+        "git_status" => tool_operator.git_status(
             get_bool("short", true),
             input.get("path").and_then(|v| v.as_str()),
         ),
-        "git_diff" => tool_executor.git_diff(
+        "git_diff" => tool_operator.git_diff(
             get_bool("cached", false),
             input.get("path").and_then(|v| v.as_str()),
         ),
-        "git_log" => tool_executor.git_log(get_usize("max_count", 10)),
-        "git_show" => tool_executor.git_show(required_tool_string(input, name, "revision")?),
-        "git_add" => tool_executor.git_add(required_tool_string(input, name, "path")?),
-        "git_commit" => tool_executor.git_commit(required_tool_string(input, name, "message")?),
+        "git_log" => tool_operator.git_log(get_usize("max_count", 10)),
+        "git_show" => tool_operator.git_show(required_tool_string(input, name, "revision")?),
+        "git_add" => tool_operator.git_add(required_tool_string(input, name, "path")?),
+        "git_commit" => tool_operator.git_commit(required_tool_string(input, name, "message")?),
         _ => bail!("Unknown tool: {name}"),
     }
 }
@@ -2532,7 +2532,7 @@ data: {"type":"message_stop"}"#.to_string(),
                 second_response_sse,
             ])));
 
-        let executor = ToolExecutor::new(temp.path().to_path_buf());
+        let executor = ToolOperator::new(temp.path().to_path_buf());
         let mut manager = ConversationManager::new(mock_api_client, executor);
 
         let final_text = manager
@@ -2552,7 +2552,7 @@ data: {"type":"message_stop"}"#.to_string(),
         let mock_api_client = ApiClient::new_mock(Arc::new(
             crate::api::mock_client::MockApiClient::new(vec![]),
         ));
-        let executor = ToolExecutor::new(temp.path().to_path_buf());
+        let executor = ToolOperator::new(temp.path().to_path_buf());
         let manager = ConversationManager::new(mock_api_client, executor);
 
         let err = manager
@@ -2601,7 +2601,7 @@ data: {"type":"message_stop"}"#.to_string(),
         let mock_api_client = ApiClient::new_mock(Arc::new(
             crate::api::mock_client::MockApiClient::new(vec![]),
         ));
-        let executor = ToolExecutor::new(std::path::PathBuf::from("."));
+        let executor = ToolOperator::new(std::path::PathBuf::from("."));
         let mut manager = ConversationManager::new(mock_api_client, executor);
 
         manager.api_messages = vec![
@@ -2688,7 +2688,7 @@ data: {"type":"message_stop"}"#.to_string(),
         let mock_api_client = ApiClient::new_mock(Arc::new(
             crate::api::mock_client::MockApiClient::new(vec![]),
         ));
-        let executor = ToolExecutor::new(std::path::PathBuf::from("."));
+        let executor = ToolOperator::new(std::path::PathBuf::from("."));
         let mut manager = ConversationManager::new(mock_api_client, executor);
 
         manager.api_messages = vec![
@@ -2719,7 +2719,7 @@ data: {"type":"message_stop"}"#.to_string(),
         let mock_api_client = ApiClient::new_mock(Arc::new(
             crate::api::mock_client::MockApiClient::new(vec![]),
         ));
-        let executor = ToolExecutor::new(std::path::PathBuf::from("."));
+        let executor = ToolOperator::new(std::path::PathBuf::from("."));
         let mut manager = ConversationManager::new(mock_api_client, executor);
 
         manager.api_messages = vec![
@@ -2757,7 +2757,7 @@ data: {"type":"message_stop"}"#.to_string(),
         let mock_api_client = ApiClient::new_mock(Arc::new(
             crate::api::mock_client::MockApiClient::new(vec![]),
         ));
-        let executor = ToolExecutor::new(std::path::PathBuf::from("."));
+        let executor = ToolOperator::new(std::path::PathBuf::from("."));
         let mut manager = ConversationManager::new(mock_api_client, executor);
 
         manager.api_messages = vec![
@@ -2810,7 +2810,7 @@ data: {"type":"message_stop"}"#.to_string(),
         let mock_api_client = ApiClient::new_mock(Arc::new(
             crate::api::mock_client::MockApiClient::new(vec![]),
         ));
-        let executor = ToolExecutor::new(std::path::PathBuf::from("."));
+        let executor = ToolOperator::new(std::path::PathBuf::from("."));
         let mut manager = ConversationManager::new(mock_api_client, executor);
 
         manager.api_messages = vec![

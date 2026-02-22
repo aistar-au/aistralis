@@ -7,7 +7,7 @@ use crate::runtime::policy::sanitize_assistant_text;
 use crate::runtime::r#loop::Runtime;
 use crate::runtime::UiUpdate;
 use crate::state::{ConversationManager, StreamBlock, ToolApprovalRequest};
-use crate::tools::ToolExecutor;
+use crate::tools::ToolOperator;
 use crate::ui::render::history_visual_line_count;
 #[cfg(test)]
 use crate::ui::render::input_visual_rows;
@@ -876,8 +876,8 @@ fn render_pass_order(mode: &TuiMode) -> Vec<RenderPass> {
 
 pub fn build_runtime(config: Config) -> Result<(Runtime<TuiMode>, RuntimeContext)> {
     let client = ApiClient::new(&config)?;
-    let executor = ToolExecutor::new(config.working_dir.clone());
-    let conversation = ConversationManager::new(client, executor);
+    let operator = ToolOperator::new(config.working_dir.clone());
+    let conversation = ConversationManager::new(client, operator);
 
     let (update_tx, update_rx) = mpsc::unbounded_channel::<UiUpdate>();
     let ctx = RuntimeContext::new(conversation, update_tx, CancellationToken::new());

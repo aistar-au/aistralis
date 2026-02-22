@@ -1,3 +1,4 @@
+use aho_corasick::AhoCorasickBuilder;
 use anyhow::{bail, Context, Result};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -7,12 +8,12 @@ const MAX_EDIT_SNIPPET_CHARS: usize = 2_000;
 const MAX_EDIT_SNIPPET_LINES: usize = 80;
 
 #[derive(Clone)]
-pub struct ToolExecutor {
+pub struct ToolOperator {
     working_dir: PathBuf,
     canonical_working_dir: PathBuf,
 }
 
-impl ToolExecutor {
+impl ToolOperator {
     pub fn new(working_dir: PathBuf) -> Self {
         let canonical_working_dir =
             fs::canonicalize(&working_dir).unwrap_or_else(|_| working_dir.clone());
@@ -229,17 +230,7 @@ impl ToolExecutor {
             non_empty_trimmed(query).context("search_files requires a non-empty 'query' field")?;
         let root = self.resolve_optional_path(path)?;
         let max_results = max_results.clamp(1, 200);
-
-        match self.search_with_rg(query, &root, max_results) {
-            Ok(result) => Ok(result),
-            Err(error) => {
-                if error.to_string().contains("Failed to execute rg command") {
-                    self.search_fallback(query, &root, max_results)
-                } else {
-                    Err(error)
-                }
-            }
-        }
+        self.search_literal(query, &root, max_results)
     }
 
     pub fn git_status(&self, short: bool, path: Option<&str>) -> Result<String> {
@@ -351,46 +342,19 @@ impl ToolExecutor {
             .unwrap_or_else(|_| path.to_string_lossy().to_string())
     }
 
-    fn search_with_rg(&self, query: &str, root: &Path, max_results: usize) -> Result<String> {
-        let mut search_path = self.to_workspace_relative_display(root);
-        if search_path.is_empty() {
-            search_path = ".".to_string();
-        }
-        let output = Command::new("rg")
-            .current_dir(&self.working_dir)
-            .arg("--line-number")
-            .arg("--color")
-            .arg("never")
-            .arg("--fixed-strings")
-            .arg("--smart-case")
-            .arg("--max-count")
-            .arg(max_results.to_string())
-            .arg("--")
-            .arg(query)
-            .arg(search_path)
-            .output()
-            .context("Failed to execute rg command")?;
-
-        if output.status.success() {
-            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if stdout.is_empty() {
-                Ok("No matches found.".to_string())
-            } else {
-                Ok(stdout)
-            }
-        } else if output.status.code() == Some(1) {
-            Ok("No matches found.".to_string())
-        } else {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            bail!("search_files failed: {}", stderr);
-        }
-    }
-
-    fn search_fallback(&self, query: &str, root: &Path, max_results: usize) -> Result<String> {
+    fn search_literal(&self, query: &str, root: &Path, max_results: usize) -> Result<String> {
         let mut results = Vec::new();
         let mut stack = vec![root.to_path_buf()];
         let case_sensitive = query.chars().any(char::is_uppercase);
-        let lowered_query = query.to_lowercase();
+        let matcher = AhoCorasickBuilder::new()
+            .ascii_case_insensitive(!case_sensitive)
+            .build([query])
+            .context("Failed to build literal search matcher")?;
+        let unicode_case_folded_query = if !case_sensitive && !query.is_ascii() {
+            Some(query.to_lowercase())
+        } else {
+            None
+        };
 
         while let Some(path) = stack.pop() {
             if self.ensure_path_is_within_workspace(&path).is_err() {
@@ -417,10 +381,10 @@ impl ToolExecutor {
             };
 
             for (idx, line) in content.lines().enumerate() {
-                let is_match = if case_sensitive {
-                    line.contains(query)
+                let is_match = if let Some(case_folded_query) = &unicode_case_folded_query {
+                    line.to_lowercase().contains(case_folded_query)
                 } else {
-                    line.to_lowercase().contains(&lowered_query)
+                    matcher.is_match(line)
                 };
                 if is_match {
                     results.push(format!(
@@ -479,7 +443,7 @@ mod tests {
     #[test]
     fn test_empty_path_rejected() {
         let temp = TempDir::new().expect("temp dir");
-        let executor = ToolExecutor::new(temp.path().to_path_buf());
+        let executor = ToolOperator::new(temp.path().to_path_buf());
 
         let err = executor
             .read_file("   ")
@@ -490,7 +454,7 @@ mod tests {
     #[test]
     fn test_edit_file_rejects_directory_target() {
         let temp = TempDir::new().expect("temp dir");
-        let executor = ToolExecutor::new(temp.path().to_path_buf());
+        let executor = ToolOperator::new(temp.path().to_path_buf());
 
         let err = executor
             .edit_file(".", "old", "new")
@@ -502,21 +466,21 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn test_search_fallback_skips_symlink_escape_paths() {
-        // Unit scope: fallback search walker must not follow symlinked directories
-        // outside the workspace when rg is unavailable.
+    fn test_search_literal_skips_symlink_escape_paths() {
+        // Unit scope: literal search walker must not follow symlinked directories
+        // outside the workspace.
         use std::os::unix::fs::symlink;
 
         let workspace = TempDir::new().expect("workspace");
         let outside = TempDir::new().expect("outside");
-        let executor = ToolExecutor::new(workspace.path().to_path_buf());
+        let executor = ToolOperator::new(workspace.path().to_path_buf());
 
         fs::write(outside.path().join("secret.txt"), "top secret\n").expect("seed outside");
         symlink(outside.path(), workspace.path().join("out")).expect("create symlink");
 
         let result = executor
-            .search_fallback("secret", workspace.path(), 20)
-            .expect("fallback search should succeed");
+            .search_literal("secret", workspace.path(), 20)
+            .expect("literal search should succeed");
         assert_eq!(result, "No matches found.");
     }
 }

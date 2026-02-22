@@ -275,6 +275,53 @@ for the exact commit that closes the checklist item.
   - Removed the legacy `VEX_DEBUG_PAYLOAD_PATH` fallback to eliminate overlapping path env resolution.
   - Logging path configuration now has one canonical env override: `VEX_API_LOG_PATH`.
 
+### Search Policy Follow-up - Literal matching only (no regex)
+- Dispatcher: codex-gpt5
+- Commit: pending (pre-commit review requested)
+- Files changed:
+  - `Cargo.toml` (+1 -0)
+  - `Cargo.lock` (+10 -0)
+  - `src/tools/operator.rs` (+25 -61)
+  - `tests/tool_operator_tests.rs` (+33 -13)
+- Line references:
+  - `Cargo.toml:12`
+  - `Cargo.lock:6`
+  - `src/tools/operator.rs:1`
+  - `src/tools/operator.rs:223`
+  - `src/tools/operator.rs:345`
+  - `tests/tool_operator_tests.rs:176`
+  - `tests/tool_operator_tests.rs:198`
+- Validation:
+  - `cargo test --all-targets` : pass
+  - `cargo clippy --all-targets -- -D warnings` : pass
+- Notes:
+  - Adopted `aho-corasick` for runtime literal search matching while preserving smart-case behavior.
+  - Removed the `rg`-backed search path from `search_files`; runtime search now uses literal-only matching.
+  - Regex (regix) matching is not used and is disallowed for runtime tool search behavior.
+
+### Runtime UX Follow-up - Normalize API transport failures and startup transcript noise
+- Dispatcher: codex-gpt5
+- Commit: pending (pre-commit review requested)
+- Files changed:
+  - `src/api/client.rs` (+39 -5)
+  - `src/bin/vex.rs` (+120 -1)
+- Line references:
+  - `src/api/client.rs:180`
+  - `src/api/client.rs:187`
+  - `src/api/client.rs:204`
+  - `src/bin/vex.rs:15`
+  - `src/bin/vex.rs:50`
+  - `src/bin/vex.rs:100`
+  - `src/bin/vex.rs:173`
+  - `src/bin/vex.rs:413`
+- Validation:
+  - `cargo test --all-targets` : pass
+  - `cargo clippy --all-targets -- -D warnings` : pass
+- Notes:
+  - Applied the shared API request error mapper to stream-chunk transport failures, so mid-stream network errors no longer bypass normalized endpoint messaging.
+  - Hardened managed TUI startup noise filtering to ignore transcript/test-output paste artifacts that contaminate first-turn input and make sessions look uncleared.
+  - Added binary tests for transcript signature detection to prevent regressions.
+
 ## Gating rules
 
 1. Phase 2 cannot start before U4 + D1 are merged and green.
@@ -282,6 +329,7 @@ for the exact commit that closes the checklist item.
 3. Runtime-core contracts from ADR-006/ADR-007 must remain canonical.
 4. Interrupt and control routing must stay typed (ADR-008 parity rule).
 5. No new text sentinel control commands may be introduced.
+6. No regex-based matching is allowed; use literal substring matching only.
 
 ## Consequences
 
