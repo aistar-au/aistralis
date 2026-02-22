@@ -29,6 +29,7 @@ pub enum ToolStatus {
     WaitingApproval,
     Executing,
     Complete,
+    Error,
     Cancelled,
 }
 

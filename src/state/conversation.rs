@@ -543,7 +543,24 @@ impl ConversationManager {
                             );
                         }
                         emit_text_update(stream_delta_tx, clarification.clone());
-                        return Ok(clarification);
+                        let history_content = truncate_for_history(
+                            &clarification,
+                            limits.max_tool_result_history_chars,
+                        );
+                        if use_structured_round {
+                            tool_result_blocks.push(ContentBlock::ToolResult {
+                                tool_use_id: id,
+                                content: history_content,
+                                is_error: true,
+                            });
+                        } else {
+                            let rendered = format!("tool_error {name}:\n{history_content}");
+                            text_protocol_tool_results.push(truncate_for_history(
+                                &rendered,
+                                limits.max_tool_result_history_chars,
+                            ));
+                        }
+                        continue;
                     }
 
                     let tool_requires_approval =
@@ -589,17 +606,32 @@ impl ConversationManager {
                             );
                         }
                         emit_text_update(stream_delta_tx, denial.clone());
-                        return Ok(denial);
+                        let history_content =
+                            truncate_for_history(&denial, limits.max_tool_result_history_chars);
+                        if use_structured_round {
+                            tool_result_blocks.push(ContentBlock::ToolResult {
+                                tool_use_id: id,
+                                content: history_content,
+                                is_error: true,
+                            });
+                        } else {
+                            let rendered = format!("tool_error {name}:\n{history_content}");
+                            text_protocol_tool_results.push(truncate_for_history(
+                                &rendered,
+                                limits.max_tool_result_history_chars,
+                            ));
+                        }
+                        continue;
                     }
 
                     let result = self
                         .execute_tool_with_timeout(&name, &input, tool_timeout)
                         .await;
                     if use_structured_blocks {
-                        let final_status = if approved {
-                            ToolStatus::Complete
+                        let final_status = if result.is_err() {
+                            ToolStatus::Error
                         } else {
-                            ToolStatus::Cancelled
+                            ToolStatus::Complete
                         };
                         self.set_tool_call_status(&id, final_status, stream_delta_tx);
 
@@ -695,23 +727,6 @@ impl ConversationManager {
         response_rx.await.unwrap_or(false)
     }
 
-    #[cfg(test)]
-    async fn execute_tool(&self, name: &str, input: &serde_json::Value) -> Result<String> {
-        #[cfg(test)]
-        {
-            execute_tool_blocking_with_operator(
-                &self.tool_operator,
-                name,
-                input,
-                self.mock_tool_operator_responses.clone(),
-            )
-        }
-        #[cfg(not(test))]
-        {
-            execute_tool_blocking_with_operator(&self.tool_operator, name, input)
-        }
-    }
-
     async fn execute_tool_with_timeout(
         &self,
         name: &str,
@@ -800,13 +815,17 @@ impl ConversationManager {
         }
 
         let len = self.api_messages.len();
-        let mut keep_start = len.saturating_sub(max_api_messages);
-        if preserve_index < keep_start {
-            keep_start = preserve_index;
-        }
+        let target_keep_start = len.saturating_sub(max_api_messages);
+        let preserve_distance = target_keep_start.saturating_sub(preserve_index);
+        let keep_preserve_anchor = preserve_index < target_keep_start && preserve_distance <= 2;
+        let mut keep_start = if keep_preserve_anchor {
+            preserve_index
+        } else {
+            target_keep_start
+        };
 
         while keep_start < len {
-            if keep_start == preserve_index {
+            if keep_preserve_anchor && keep_start == preserve_index {
                 break;
             }
             let message = &self.api_messages[keep_start];
@@ -814,10 +833,6 @@ impl ConversationManager {
                 break;
             }
             keep_start += 1;
-        }
-
-        if keep_start > preserve_index {
-            keep_start = preserve_index;
         }
 
         if keep_start >= len {
@@ -906,10 +921,19 @@ impl ConversationManager {
         stream_delta_tx: Option<&mpsc::UnboundedSender<ConversationStreamUpdate>>,
     ) {
         while self.current_turn_blocks.len() < index {
-            self.current_turn_blocks.push(StreamBlock::Thinking {
+            let pad_index = self.current_turn_blocks.len();
+            let placeholder = StreamBlock::Thinking {
                 content: String::new(),
                 collapsed: true,
-            });
+            };
+            self.current_turn_blocks.push(placeholder.clone());
+            emit_stream_update(
+                stream_delta_tx,
+                ConversationStreamUpdate::BlockStart {
+                    index: pad_index,
+                    block: placeholder,
+                },
+            );
         }
 
         if index < self.current_turn_blocks.len() {
@@ -1287,7 +1311,7 @@ fn append_incremental_suffix(existing: &mut String, incoming: &str) -> String {
         existing.push_str(incoming);
         return suffix;
     }
-    if existing.starts_with(incoming) || existing.ends_with(incoming) {
+    if existing.starts_with(incoming) {
         return String::new();
     }
 
@@ -1305,6 +1329,13 @@ fn append_incremental_suffix(existing: &mut String, incoming: &str) -> String {
             overlap = idx;
         }
     }
+    if overlap == incoming.len()
+        && existing.ends_with(incoming)
+        && incoming.len().saturating_mul(2) < existing.len()
+    {
+        overlap = 0;
+    }
+
     let suffix = incoming[overlap..].to_string();
     if !suffix.is_empty() {
         existing.push_str(&suffix);
@@ -2501,29 +2532,46 @@ data: {"type":"message_stop"}"#.to_string(),
         let mut manager = ConversationManager::new_mock(mock_api_client, HashMap::new());
 
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let tx_for_send = tx.clone();
-        let mut send_future = std::pin::pin!(
-            manager.send_message("create calculator.rs".to_string(), Some(&tx_for_send))
-        );
-        let mut saw_approval_request = false;
-
-        let final_text = loop {
-            tokio::select! {
-                result = &mut send_future => break result?,
-                maybe_update = rx.recv() => {
-                    let Some(update) = maybe_update else { continue; };
-                    if let ConversationStreamUpdate::ToolApprovalRequest(request) = update {
-                        saw_approval_request = true;
-                        let _ = request.response_tx.send(false);
-                    }
+        let approval_task = tokio::spawn(async move {
+            let mut saw_approval_request = false;
+            while let Some(update) = rx.recv().await {
+                if let ConversationStreamUpdate::ToolApprovalRequest(request) = update {
+                    saw_approval_request = true;
+                    let _ = request.response_tx.send(false);
                 }
             }
-        };
+            saw_approval_request
+        });
+        let final_text = manager
+            .send_message("create calculator.rs".to_string(), Some(&tx))
+            .await?;
+        drop(tx);
+        let saw_approval_request = approval_task.await?;
 
         std::env::remove_var("VEX_TOOL_CONFIRM");
         assert!(saw_approval_request);
-        assert!(final_text.contains("Stopped: approval denied for write_file"));
-        assert!(final_text.contains("No file changes were made"));
+        assert!(final_text.contains("No changes were applied."));
+        let tool_result_message = manager
+            .api_messages
+            .iter()
+            .find(|message| {
+                message.role == "user"
+                    && matches!(message.content, Content::Blocks(_))
+                    && message_contains_tool_result(message)
+            })
+            .expect("expected tool_result message in history");
+        if let Content::Blocks(blocks) = &tool_result_message.content {
+            assert!(blocks.iter().any(|block| matches!(
+                block,
+                ContentBlock::ToolResult {
+                    tool_use_id,
+                    is_error: true,
+                    ..
+                } if tool_use_id == "toolu_mut_01"
+            )));
+        } else {
+            panic!("expected tool_result blocks");
+        }
         Ok(())
     }
 
@@ -2542,9 +2590,12 @@ data: {"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":
 data: {"type":"message_stop"}"#.to_string(),
         ];
 
+        let second_response_sse =
+            plain_text_round("msg_missing_path_02", "Please provide a target file path.");
         let mock_api_client =
             ApiClient::new_mock(Arc::new(crate::api::mock_client::MockApiClient::new(vec![
                 first_response_sse,
+                second_response_sse,
             ])));
         let mut manager = ConversationManager::new_mock(mock_api_client, HashMap::new());
 
@@ -2552,7 +2603,157 @@ data: {"type":"message_stop"}"#.to_string(),
             .send_message("please edit".to_string(), None)
             .await?;
         assert!(final_text.contains("target file path"));
-        assert!(final_text.contains("No file changes were made"));
+        let tool_result_message = manager
+            .api_messages
+            .iter()
+            .find(|message| {
+                message.role == "user"
+                    && matches!(message.content, Content::Blocks(_))
+                    && message_contains_tool_result(message)
+            })
+            .expect("expected tool_result message in history");
+        if let Content::Blocks(blocks) = &tool_result_message.content {
+            assert!(blocks
+                .iter()
+                .any(|block| matches!(block, ContentBlock::ToolResult { is_error: true, .. })));
+        } else {
+            panic!("expected tool_result blocks");
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_tool_execution_error_sets_error_status() -> Result<()> {
+        let first_response_sse = vec![
+            r#"event: message_start
+data: {"type":"message_start","message":{"id":"msg_tool_error_01","type":"message","role":"assistant","model":"mock-model","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}"#.to_string(),
+            r#"event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_error_01","name":"read_file","input":{}}}"#.to_string(),
+            r#"event: content_block_stop
+data: {"type":"content_block_stop","index":0}"#.to_string(),
+            r#"event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":3}}"#.to_string(),
+            r#"event: message_stop
+data: {"type":"message_stop"}"#.to_string(),
+        ];
+        let second_response_sse = plain_text_round("msg_tool_error_02", "Handled read error.");
+        let mock_api_client =
+            ApiClient::new_mock(Arc::new(crate::api::mock_client::MockApiClient::new(vec![
+                first_response_sse,
+                second_response_sse,
+            ])));
+        let mut manager = ConversationManager::new_mock(mock_api_client, HashMap::new());
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let final_text = manager
+            .send_message("read missing path".to_string(), Some(&tx))
+            .await?;
+        assert!(final_text.contains("Handled read error."));
+        drop(tx);
+
+        let mut saw_error_status = false;
+        while let Ok(update) = rx.try_recv() {
+            if let ConversationStreamUpdate::BlockStart {
+                block: StreamBlock::ToolCall { id, status, .. },
+                ..
+            } = update
+            {
+                if id == "toolu_error_01" && status == ToolStatus::Error {
+                    saw_error_status = true;
+                }
+            }
+        }
+        assert!(
+            saw_error_status,
+            "tool execution failure must emit ToolStatus::Error"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_multi_tool_round_collects_results_after_approval_denial() -> Result<()> {
+        let _env_lock = crate::test_support::ENV_LOCK.lock().await;
+        std::env::set_var("VEX_TOOL_CONFIRM", "off");
+
+        let first_response_sse = vec![
+            r#"event: message_start
+data: {"type":"message_start","message":{"id":"msg_multi_01","type":"message","role":"assistant","model":"mock-model","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}"#.to_string(),
+            r#"event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_multi_mut","name":"write_file","input":{"path":"calculator.rs","content":"fn main() {}\n"}}}"#.to_string(),
+            r#"event: content_block_stop
+data: {"type":"content_block_stop","index":0}"#.to_string(),
+            r#"event: content_block_start
+data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_multi_read","name":"read_file","input":{"path":"file.txt"}}}"#.to_string(),
+            r#"event: content_block_stop
+data: {"type":"content_block_stop","index":1}"#.to_string(),
+            r#"event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":6}}"#.to_string(),
+            r#"event: message_stop
+data: {"type":"message_stop"}"#.to_string(),
+        ];
+        let second_response_sse = plain_text_round("msg_multi_02", "Handled both tool outcomes.");
+        let mock_api_client =
+            ApiClient::new_mock(Arc::new(crate::api::mock_client::MockApiClient::new(vec![
+                first_response_sse,
+                second_response_sse,
+            ])));
+        let mut mock_tool_responses = HashMap::new();
+        mock_tool_responses.insert("file.txt".to_string(), "hello".to_string());
+        let mut manager = ConversationManager::new_mock(mock_api_client, mock_tool_responses);
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let approval_task = tokio::spawn(async move {
+            let mut saw_approval_request = false;
+            while let Some(update) = rx.recv().await {
+                if let ConversationStreamUpdate::ToolApprovalRequest(request) = update {
+                    saw_approval_request = true;
+                    let _ = request.response_tx.send(false);
+                }
+            }
+            saw_approval_request
+        });
+        let final_text = manager
+            .send_message("run mixed tools".to_string(), Some(&tx))
+            .await?;
+        drop(tx);
+        let saw_approval_request = approval_task.await?;
+        std::env::remove_var("VEX_TOOL_CONFIRM");
+
+        assert!(
+            saw_approval_request,
+            "expected mutating tool approval request"
+        );
+        assert!(final_text.contains("Handled both tool outcomes."));
+
+        let tool_result_message = manager
+            .api_messages
+            .iter()
+            .find(|message| {
+                message.role == "user"
+                    && matches!(message.content, Content::Blocks(_))
+                    && message_contains_tool_result(message)
+            })
+            .expect("expected tool_result message in history");
+        if let Content::Blocks(blocks) = &tool_result_message.content {
+            assert!(blocks.iter().any(|block| matches!(
+                block,
+                ContentBlock::ToolResult {
+                    tool_use_id,
+                    is_error: true,
+                    ..
+                } if tool_use_id == "toolu_multi_mut"
+            )));
+            assert!(blocks.iter().any(|block| matches!(
+                block,
+                ContentBlock::ToolResult {
+                    tool_use_id,
+                    is_error: false,
+                    ..
+                } if tool_use_id == "toolu_multi_read"
+            )));
+        } else {
+            panic!("expected tool_result blocks");
+        }
         Ok(())
     }
 
@@ -2928,13 +3129,14 @@ data: {"type":"message_stop"}"#.to_string(),
         let manager = ConversationManager::new(mock_api_client, executor);
 
         let err = manager
-            .execute_tool(
+            .execute_tool_with_timeout(
                 "edit_file",
                 &json!({
                     "path": "",
                     "old_str": "old",
                     "new_str": "new"
                 }),
+                Duration::from_secs(1),
             )
             .await
             .expect_err("empty path should be rejected");
@@ -2956,13 +3158,14 @@ data: {"type":"message_stop"}"#.to_string(),
         std::fs::write(&target, "pub fn calc() -> i32 { 1 }\n")?;
 
         let result = manager
-            .execute_tool(
+            .execute_tool_with_timeout(
                 "edit_file",
                 &json!({
                     "file_path": "src/calculator.rs",
                     "old_text": "1",
                     "new_text": "2"
                 }),
+                Duration::from_secs(1),
             )
             .await?;
         assert!(result.contains("Updated snippet in src/calculator.rs"));
@@ -2986,13 +3189,14 @@ data: {"type":"message_stop"}"#.to_string(),
         std::fs::write(&target, "pub fn sqrt() {}\n// keep\n")?;
 
         let result = manager
-            .execute_tool(
+            .execute_tool_with_timeout(
                 "edit_file",
                 &json!({
                     "path": "src/calculator.rs",
                     "old_str": "pub fn sqrt() {}\n",
                     "new_str": ""
                 }),
+                Duration::from_secs(1),
             )
             .await?;
 
@@ -3025,6 +3229,14 @@ data: {"type":"message_stop"}"#.to_string(),
         assert_eq!(first, "•");
         assert_eq!(second, " item");
         assert_eq!(content, "• item");
+    }
+
+    #[test]
+    fn test_append_incremental_suffix_keeps_short_suffix_repeat_as_new_delta() {
+        let mut content = "The contents of the file are:\n".to_string();
+        let appended = append_incremental_suffix(&mut content, "are:\n");
+        assert_eq!(appended, "are:\n");
+        assert_eq!(content, "The contents of the file are:\nare:\n");
     }
 
     #[test]
@@ -3111,6 +3323,105 @@ data: {"type":"message_stop"}"#.to_string(),
                 Some((role, Content::Text(text))) if role.as_str() == "user" && text == "anchor user prompt"
             ),
             "turn anchor user prompt must be preserved during loop pruning"
+        );
+    }
+
+    #[test]
+    fn test_prune_message_history_preserving_allows_prune_when_anchor_is_far_behind() {
+        let mock_api_client = ApiClient::new_mock(Arc::new(
+            crate::api::mock_client::MockApiClient::new(vec![]),
+        ));
+        let mut manager = ConversationManager::new_mock(mock_api_client, HashMap::new());
+
+        manager.api_messages = vec![
+            ApiMessage {
+                role: "user".to_string(),
+                content: Content::Text("anchor user prompt".to_string()),
+            },
+            ApiMessage {
+                role: "assistant".to_string(),
+                content: Content::Text("a0".to_string()),
+            },
+            ApiMessage {
+                role: "user".to_string(),
+                content: Content::Text("u1".to_string()),
+            },
+            ApiMessage {
+                role: "assistant".to_string(),
+                content: Content::Text("a1".to_string()),
+            },
+            ApiMessage {
+                role: "user".to_string(),
+                content: Content::Text("u2".to_string()),
+            },
+            ApiMessage {
+                role: "assistant".to_string(),
+                content: Content::Text("a2".to_string()),
+            },
+            ApiMessage {
+                role: "user".to_string(),
+                content: Content::Text("u3".to_string()),
+            },
+            ApiMessage {
+                role: "assistant".to_string(),
+                content: Content::Text("a3".to_string()),
+            },
+        ];
+
+        let new_anchor = manager.prune_message_history_preserving(4, 0);
+        assert_eq!(
+            manager.api_messages.len(),
+            4,
+            "pruning should proceed when anchor is far behind target window"
+        );
+        assert_eq!(new_anchor, 0);
+        assert_eq!(manager.api_messages[0].role, "user");
+        match &manager.api_messages[0].content {
+            Content::Text(text) => assert_eq!(text, "u2"),
+            _ => panic!("expected user text content"),
+        }
+    }
+
+    #[test]
+    fn test_upsert_turn_block_emits_padding_block_starts() {
+        let mock_api_client = ApiClient::new_mock(Arc::new(
+            crate::api::mock_client::MockApiClient::new(vec![]),
+        ));
+        let mut manager = ConversationManager::new_mock(mock_api_client, HashMap::new());
+        let (tx, mut rx) = mpsc::unbounded_channel();
+
+        manager.upsert_turn_block(
+            2,
+            StreamBlock::ToolCall {
+                id: "toolu_pad_01".to_string(),
+                name: "read_file".to_string(),
+                input: json!({"path": "file.txt"}),
+                status: ToolStatus::Pending,
+            },
+            Some(&tx),
+        );
+        drop(tx);
+
+        let mut started_indices = Vec::new();
+        while let Ok(update) = rx.try_recv() {
+            if let ConversationStreamUpdate::BlockStart { index, block } = update {
+                started_indices.push(index);
+                if index <= 1 {
+                    assert!(matches!(
+                        block,
+                        StreamBlock::Thinking {
+                            content,
+                            collapsed: true
+                        } if content.is_empty()
+                    ));
+                }
+            }
+        }
+
+        assert_eq!(
+            started_indices,
+            vec![0, 1, 2],
+            "padding blocks and target block must each emit BlockStart"
         );
     }
 

@@ -1,7 +1,7 @@
 # ADR-019: ADR-018 Follow-up — Correctness, Cutover, and Cleanup
 
 **Date:** 2026-02-22
-**Status:** Proposed
+**Status:** Accepted
 **Deciders:** Core maintainer
 **Related tasks:** B1, U1, U2, U3, U4, D1, D2 (dispatcher-assigned work items)
 **ADR chain:** ADR-006, ADR-007, ADR-008, ADR-009, ADR-010, ADR-018
