@@ -23,7 +23,6 @@ store ADR files.
 | :--- | :--- | :--- |
 | [ADR-013](ADR-013-tui-completion-deployment-plan.md) | TUI completion and deployment plan | Proposed |
 | [ADR-018](ADR-018-managed-tui-scrollback-streaming-cell-overlays.md) | Managed TUI scrollback, streaming cell, overlays | Proposed |
-| [ADR-020](ADR-020-looping-architecture-enriched-response-correctness.md) | Looping architecture and enriched tool response correctness | Proposed |
 
 ## Completed ADR Records
 
@@ -46,3 +45,4 @@ store ADR files.
 | [ADR-016](completed/ADR-016-local-tool-loop-guard-and-correction.md) | Local tool-loop guard and correction path | Accepted |
 | [ADR-017](completed/ADR-017-append-terminal-single-session.md) | Append-terminal single session runtime | Superseded by ADR-018 |
 | [ADR-019](completed/ADR-019-adr-018-follow-up-correctness-cutover-cleanup.md) | ADR-018 follow-up sequencing for correctness, cutover, and cleanup | Accepted |
+| [ADR-020](completed/ADR-020-looping-architecture-enriched-response-correctness.md) | Looping architecture and enriched tool response correctness | Accepted |

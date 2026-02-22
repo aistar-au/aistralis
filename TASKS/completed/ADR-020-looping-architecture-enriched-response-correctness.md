@@ -1,9 +1,9 @@
 # ADR-020: Looping Architecture and Enriched Tool Response Correctness
 
 **Date:** 2026-02-22
-**Status:** Proposed
+**Status:** Accepted
 **Deciders:** Core maintainer
-**Related tasks:** L1, L2, L3, L4, L5, L6
+**Related tasks:** L1, L2, L3, L4, L5, L6, REF-10
 **ADR chain:** ADR-018, ADR-019
 
 ## Context
@@ -59,6 +59,16 @@ explicit regression tests.
 - Route tests through `execute_tool_with_timeout` to keep behavior aligned with
   production dispatch.
 
+### REF-10 - Split `conversation.rs` into conventional submodules
+
+- Convert `src/state/conversation.rs` into a thin module entrypoint with
+  re-exports only.
+- Move conversation logic into responsibility-focused child modules:
+  `state.rs`, `core.rs`, `tools.rs`, `streaming.rs`, `history.rs`, and
+  `tests.rs`.
+- Preserve public API and behavior while reducing the god-file blast radius for
+  future fixes.
+
 ## Dispatcher checklist
 
 - [x] **L1** Tool execution errors emit `ToolStatus::Error`
@@ -67,6 +77,7 @@ explicit regression tests.
 - [x] **L4** History pruning remains bounded when anchor is far behind
 - [x] **L5** Padded block indices emit corresponding `BlockStart`
 - [x] **L6** Remove dead test-only tool execution path
+- [x] **REF-10** Conversation module split with thin entrypoint + submodules
 
 ## Evidence
 
@@ -135,6 +146,39 @@ explicit regression tests.
   - Added deterministic short-circuit handling for capability-style prompts such as “what other git tools can you call”, returning only supported built-in git tools.
   - Prevents unsupported git-tool claims (`git_clone`, `git_init`, `git_remote`, etc.) in this capability path.
   - Added explicit system-prompt constraints and regression tests to keep git-tool capability claims aligned with implemented tool definitions.
+
+### REF-10 - Conversation module split and thin entrypoint (2026-02-22)
+- Dispatcher: automation-agent
+- Commit: `41750ad`
+- Files changed:
+  - `src/state/conversation.rs` (+11 -3840)
+  - `src/state/conversation/core.rs` (+646 -0)
+  - `src/state/conversation/history.rs` (+274 -0)
+  - `src/state/conversation/state.rs` (+86 -0)
+  - `src/state/conversation/streaming.rs` (+282 -0)
+  - `src/state/conversation/tests.rs` (+1940 -0)
+  - `src/state/conversation/tools.rs` (+676 -0)
+- Final module sizes:
+  - `src/state/conversation.rs`: 17 lines (thin entry file)
+  - `src/state/conversation/state.rs`: 86 lines
+  - `src/state/conversation/core.rs`: 646 lines
+  - `src/state/conversation/tools.rs`: 676 lines
+  - `src/state/conversation/streaming.rs`: 282 lines
+  - `src/state/conversation/history.rs`: 274 lines
+  - `src/state/conversation/tests.rs`: 1940 lines
+- How the change was applied:
+  - Created `src/state/conversation/` and grouped code by responsibility
+    (state/core/tools/streaming/history/tests).
+  - Replaced the original monolith with a thin module entrypoint:
+    `mod ...;` plus `pub use` re-exports.
+  - Kept runtime behavior and external API stable; this was a file-structure
+    refactor, not a protocol rewrite.
+  - Added structure anchor test:
+    `src/state/conversation/tests.rs` →
+    `test_conversation_module_structure`.
+- Validation:
+  - `cargo test test_conversation_module_structure -- --nocapture` : pass
+  - `cargo test --all-targets` : pass
 
 ## External Review Notes (verbatim)
 
