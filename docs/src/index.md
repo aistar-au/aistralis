@@ -68,8 +68,7 @@ ADR files are not stored in `docs/`.
 
 ## Source Links
 
-The canonical tracked Rust source map (with raw file URLs) is maintained in:
+The canonical tracked source maps are maintained in:
 
-- `CONTRIBUTING.md`
-- `README.md`
+- `CONTRIBUTING.md` (app-level Rust source map)
 - `TASKS/completed/REPO-RAW-URL-MAP.md` (all tracked repository files)

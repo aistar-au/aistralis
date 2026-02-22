@@ -185,8 +185,6 @@ vexcoder/
 | `tests/stream_parser_tests.rs` | Stream parser protocol and fragmentation tests. Raw: <https://raw.githubusercontent.com/aistar-au/vexcoder/main/tests/stream_parser_tests.rs> |
 | `tests/tool_operator_tests.rs` | Tool operator behavior/security tests for file and git actions. Raw: <https://raw.githubusercontent.com/aistar-au/vexcoder/main/tests/tool_operator_tests.rs> |
 
-`src/calculator.rs` is currently untracked and intentionally excluded from the tracked repo map above.
-
 ---
 
 ## 🔗 Reference
