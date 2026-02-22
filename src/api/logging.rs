@@ -3,9 +3,11 @@ use std::fs::OpenOptions;
 use std::io::{IsTerminal, Write};
 
 const DEFAULT_API_LOG_PATH: &str = "/tmp/vex-debug-payload.log";
+const DEBUG_PAYLOAD_ENV: &str = "VEX_DEBUG_PAYLOAD";
+const API_LOG_PATH_ENV: &str = "VEX_API_LOG_PATH";
 
 pub fn debug_payload_enabled() -> bool {
-    std::env::var("VEX_DEBUG_PAYLOAD")
+    std::env::var(DEBUG_PAYLOAD_ENV)
         .ok()
         .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
 }
@@ -41,16 +43,10 @@ fn emit_log_message(message: &str) {
 }
 
 fn resolve_log_path() -> Option<String> {
-    std::env::var("VEX_API_LOG_PATH")
+    std::env::var(API_LOG_PATH_ENV)
         .ok()
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
-        .or_else(|| {
-            std::env::var("VEX_DEBUG_PAYLOAD_PATH")
-                .ok()
-                .map(|v| v.trim().to_string())
-                .filter(|v| !v.is_empty())
-        })
         .or_else(|| {
             if std::io::stderr().is_terminal() {
                 Some(DEFAULT_API_LOG_PATH.to_string())
@@ -72,29 +68,18 @@ mod tests {
     #[test]
     fn test_debug_payload_enabled_accepts_true_variants() {
         let _env_lock = crate::test_support::ENV_LOCK.blocking_lock();
-        std::env::set_var("VEX_DEBUG_PAYLOAD", "1");
+        std::env::set_var(DEBUG_PAYLOAD_ENV, "1");
         assert!(debug_payload_enabled());
-        std::env::set_var("VEX_DEBUG_PAYLOAD", "TRUE");
+        std::env::set_var(DEBUG_PAYLOAD_ENV, "TRUE");
         assert!(debug_payload_enabled());
-        std::env::remove_var("VEX_DEBUG_PAYLOAD");
+        std::env::remove_var(DEBUG_PAYLOAD_ENV);
     }
 
     #[test]
-    fn test_resolve_log_path_prefers_api_log_path() {
+    fn test_resolve_log_path_uses_api_log_path() {
         let _env_lock = crate::test_support::ENV_LOCK.blocking_lock();
-        std::env::set_var("VEX_API_LOG_PATH", "/tmp/test-api.log");
-        std::env::set_var("VEX_DEBUG_PAYLOAD_PATH", "/tmp/test-debug.log");
+        std::env::set_var(API_LOG_PATH_ENV, "/tmp/test-api.log");
         assert_eq!(resolve_log_path().as_deref(), Some("/tmp/test-api.log"));
-        std::env::remove_var("VEX_API_LOG_PATH");
-        std::env::remove_var("VEX_DEBUG_PAYLOAD_PATH");
-    }
-
-    #[test]
-    fn test_resolve_log_path_falls_back_to_debug_payload_path() {
-        let _env_lock = crate::test_support::ENV_LOCK.blocking_lock();
-        std::env::remove_var("VEX_API_LOG_PATH");
-        std::env::set_var("VEX_DEBUG_PAYLOAD_PATH", "/tmp/test-debug.log");
-        assert_eq!(resolve_log_path().as_deref(), Some("/tmp/test-debug.log"));
-        std::env::remove_var("VEX_DEBUG_PAYLOAD_PATH");
+        std::env::remove_var(API_LOG_PATH_ENV);
     }
 }

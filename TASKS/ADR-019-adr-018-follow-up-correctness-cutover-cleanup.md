@@ -244,6 +244,37 @@ for the exact commit that closes the checklist item.
   - Removed dead legacy calculator program that was not part of any compiled target.
   - `autobins = false` with explicit `[[bin]] path = "src/bin/vex.rs"` remains the only binary build path.
 
+### Branding Follow-up - Standardize remaining non-vexcoder references
+- Dispatcher: codex-gpt5
+- Commit: pending (pre-commit review requested)
+- Files changed:
+  - `LICENSE` (+1 -1)
+  - `docs/book.toml` (+1 -1)
+- Line references:
+  - `LICENSE:3`
+  - `docs/book.toml:11`
+- Validation:
+  - `cargo test --all-targets` : pass
+- Notes:
+  - Replaced remaining legacy org-name branding references in active source files with `vexcoder`.
+  - Updated docs source metadata URL to the vexcoder-branded GitHub path.
+
+### API Logging Follow-up - Canonicalize debug path env contract
+- Dispatcher: codex-gpt5
+- Commit: pending (pre-commit review requested)
+- Files changed:
+  - `src/api/logging.rs` (+10 -25)
+- Line references:
+  - `src/api/logging.rs:6`
+  - `src/api/logging.rs:45`
+  - `src/api/logging.rs:78`
+- Validation:
+  - `cargo test --all-targets` : pass
+  - `cargo clippy --all-targets -- -D warnings` : pass
+- Notes:
+  - Removed the legacy `VEX_DEBUG_PAYLOAD_PATH` fallback to eliminate overlapping path env resolution.
+  - Logging path configuration now has one canonical env override: `VEX_API_LOG_PATH`.
+
 ## Gating rules
 
 1. Phase 2 cannot start before U4 + D1 are merged and green.

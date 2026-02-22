@@ -8,4 +8,4 @@ src = "src"
 [output.html]
 default-theme = "light"
 preferred-dark-theme = "navy"
-git-repository-url = "https://github.com/aistar-au/vexcoder"
+git-repository-url = "https://github.com/vexcoder/vexcoder"
