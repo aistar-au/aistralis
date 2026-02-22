@@ -205,12 +205,68 @@ current tree.
   - Evaluate optional lock/atomic-write strategy if multi-writer scenarios are
     in scope.
 
+### 21) “Unhandled `git` command panics” in `ToolOperator::run_git`
+- **Status**: **Not accurate (current tree)**
+- **Evidence**:
+  - `src/tools/operator.rs::run_git` uses:
+    `Command::new("git").current_dir(...).args(...).output().context(...) ?`.
+  - Spawn/exec failures are returned as `anyhow::Error`; they do not panic.
+- **Priority**: **N/A**
+
+### 22) `StreamBlock::ToolCall` deltas ignored in `TuiMode::on_model_update`
+- **Status**: **Partially accurate**
+- **Evidence**:
+  - `src/app.rs` ignores `StreamBlockDelta` payload for
+    `StreamBlock::ToolCall`/`StreamBlock::ToolResult`.
+  - This does not break current UX because approval/preview surfaces are fed by
+    explicit tool approval/update paths, not incremental tool-call text render.
+- **Risk posture**:
+  - Potential future mismatch if UI begins to rely on incremental tool-call
+    JSON in `active_stream_blocks`.
+- **Priority**: **P2**
+- **Follow-up**:
+  - Either document this as intentional or implement incremental tool-call
+    input accumulation in `active_stream_blocks`.
+
+### 23) UTF-8 safety concern in `strip_incomplete_tool_tag_suffix`
+- **Status**: **Not accurate (current tree)**
+- **Evidence**:
+  - `rfind('<')` returns the byte index of ASCII `<`, which is always a valid
+    UTF-8 scalar boundary.
+  - `truncate(last_open)` therefore truncates on a valid boundary.
+- **Priority**: **N/A**
+
+### 24) Startup event draining and paste-noise heuristics
+- **Status**: **Partially accurate**
+- **Evidence**:
+  - `src/bin/vex.rs::drain_startup_events` and
+    `should_ignore_startup_paste` are heuristic/best-effort filters.
+  - They can trade off occasional false-positive drops against transcript-noise
+    suppression.
+- **Priority**: **P2**
+- **Follow-up**:
+  - Keep behavior, but add telemetry/debug counters or explicit opt-out env
+    switch if false positives are observed in practice.
+
+### 25) Late `StreamDelta` dropped when no active turn slot
+- **Status**: **Partially accurate**
+- **Evidence**:
+  - `src/app.rs::on_model_update` drops `UiUpdate::StreamDelta` when
+    `active_assistant_index` is `None` and `turn_in_progress` is false.
+  - This is intentional stale-delta protection after cancel/complete, but can
+    discard straggler data from delayed streams.
+- **Priority**: **P2**
+- **Follow-up**:
+  - Keep current guard; consider debug-only observability for dropped stale
+    deltas if field reports indicate truncation symptoms.
+
 ## Immediate Dispatch Recommendation
 
 1. Keep P0 items 1–4 closed and add P0.17 (dirty/tick-aware render scheduling).
 2. Address P1.18 and P1.19 (input bounds + parse-error UI surfacing).
-3. Continue P2 dedup/cleanup items in small PRs with regression tests.
-4. Track P3 refactors as separate ADR-backed batches with explicit gates.
+3. Treat items 21 and 23 as closed (`not accurate`), no implementation work.
+4. Keep items 22, 24, and 25 as P2 design/observability follow-ups.
+5. Continue P2/P3 refactors in ADR-backed, test-gated batches.
 
 ## Validation Commands
 
