@@ -260,13 +260,70 @@ current tree.
   - Keep current guard; consider debug-only observability for dropped stale
     deltas if field reports indicate truncation symptoms.
 
+### 26) SSE parser buffer can grow unbounded without frame delimiter
+- **Status**: **Confirmed**
+- **Evidence**:
+  - `src/api/stream.rs::StreamParser::process` appends chunk data into
+    `self.buffer`.
+  - Drain only occurs when `\n\n` frame delimiters are found (`start > 0`).
+  - A malformed upstream stream with no delimiters can grow buffer
+    indefinitely.
+- **Priority**: **P1**
+- **Follow-up**:
+  - Add a bounded buffer cap (e.g., `MAX_SSE_BUFFER_CHARS`) and fail fast with
+    a surfaced `UiUpdate::Error` path when exceeded.
+
+### 27) `active_assistant_index` drift race claim during history cap
+- **Status**: **Not accurate (current tree)**
+- **Evidence**:
+  - UI updates are processed sequentially in the runtime loop (single consumer
+    of `UiUpdate` stream), not concurrently mutating `TuiMode`.
+  - `enforce_history_cap` uses `checked_sub` for index rebasing.
+  - Existing regression tests validate index safety under cap+stream flow.
+- **Priority**: **N/A**
+- **Note**:
+  - Related stale-delta behavior remains tracked in item 25.
+
+### 28) Read-only intent heuristic can produce false positives
+- **Status**: **Partially accurate**
+- **Evidence**:
+  - `src/state/conversation/tools.rs::is_read_only_user_request` uses keyword
+    heuristics over read-only/mutating hint sets.
+  - Mixed-intent prompts can still be misclassified despite mutating hint
+    checks.
+- **Priority**: **P2**
+- **Follow-up**:
+  - Keep guard as default safety net; refine with stronger disambiguation or
+    explicit user/model override path.
+
+### 29) `append_incremental_suffix` overlap algorithm cost on large deltas
+- **Status**: **Partially accurate**
+- **Evidence**:
+  - `src/state/conversation/streaming.rs::append_incremental_suffix` iterates
+    char boundaries and calls `ends_with` repeatedly.
+  - Correct for UTF-8 safety, but can be expensive for very large streaming
+    payloads.
+- **Priority**: **P3**
+- **Follow-up**:
+  - Keep current logic for correctness; consider optimized overlap matching if
+    profiling shows this path is hot.
+
+### 30) `RuntimeContext` `RwLock` optimization suggestion
+- **Status**: **Not accurate (current tree)**
+- **Evidence**:
+  - `ConversationManager` work is mutation-heavy per turn; lock is held for
+    send/stream orchestration by design.
+  - `RwLock` does not meaningfully improve current single active-turn model.
+- **Priority**: **N/A**
+
 ## Immediate Dispatch Recommendation
 
 1. Keep P0 items 1–4 closed and add P0.17 (dirty/tick-aware render scheduling).
-2. Address P1.18 and P1.19 (input bounds + parse-error UI surfacing).
-3. Treat items 21 and 23 as closed (`not accurate`), no implementation work.
-4. Keep items 22, 24, and 25 as P2 design/observability follow-ups.
-5. Continue P2/P3 refactors in ADR-backed, test-gated batches.
+2. Address P1.18, P1.19, and P1.26 (input bounds + parse-error surfacing + SSE buffer cap).
+3. Treat items 21, 23, 27, and 30 as closed (`not accurate`), no implementation work.
+4. Keep items 22, 24, 25, and 28 as P2 design/observability follow-ups.
+5. Keep item 29 as a P3 performance optimization candidate.
+6. Continue P2/P3 refactors in ADR-backed, test-gated batches.
 
 ## Validation Commands
 
