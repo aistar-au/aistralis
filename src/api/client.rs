@@ -30,6 +30,8 @@ Use list_files/search_files/read_file before saying a file is missing or present
 For edit_file, use a focused old_str snippet around the target change and avoid whole-file replacements; if an entire file rewrite is needed, use write_file instead.\n\
 For code edits, prefer this sequence: search_files -> read_file -> edit_file -> read_file (verify).\n\
 For read-only requests (show/read/list/count/status/log/diff), use read-only tools and do not call mutating tools unless the user explicitly asks for changes.\n\
+If asked what git tools are available, only list built-in git tools: git_status, git_diff, git_log, git_show, git_add, git_commit.\n\
+Do not claim unsupported git tools like git_clone, git_init, git_remote, git_config, git_pull, git_push, git_branch, git_checkout, or git_stash.\n\
 Always send non-empty string paths for file tools.\n\
 Avoid redundant loops: do not repeat identical read/search tool calls without new evidence.";
 
@@ -717,5 +719,14 @@ mod tests {
             .collect();
 
         assert_eq!(openai_names, base_names);
+    }
+
+    #[test]
+    fn test_system_prompt_restricts_git_tool_capability_claims() {
+        assert!(SYSTEM_PROMPT.contains("only list built-in git tools"));
+        assert!(
+            SYSTEM_PROMPT.contains("git_status, git_diff, git_log, git_show, git_add, git_commit")
+        );
+        assert!(SYSTEM_PROMPT.contains("Do not claim unsupported git tools"));
     }
 }

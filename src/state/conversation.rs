@@ -121,6 +121,14 @@ impl ConversationManager {
         self.current_turn_blocks.clear();
         let original_user_input = content.clone();
         self.push_user_message(content);
+        if let Some(response) = builtin_supported_git_tools_response(&original_user_input) {
+            self.api_messages.push(ApiMessage {
+                role: "assistant".to_string(),
+                content: Content::Text(response.clone()),
+            });
+            emit_text_update(stream_delta_tx, response.clone());
+            return Ok(response);
+        }
         let mut turn_user_anchor_index = self.api_messages.len().saturating_sub(1);
 
         let core_policy = default_runtime_policy();
@@ -1893,6 +1901,26 @@ fn tool_round_signature(blocks: &[ContentBlock]) -> Vec<String> {
     signature
 }
 
+fn builtin_supported_git_tools_response(input: &str) -> Option<String> {
+    let normalized = input.to_ascii_lowercase();
+    let asks_git_capabilities = (normalized.contains("git tool")
+        || normalized.contains("git tools")
+        || normalized.contains("git command")
+        || normalized.contains("git commands"))
+        && (normalized.contains("what")
+            || normalized.contains("which")
+            || normalized.contains("can you")
+            || normalized.contains("available"));
+    if !asks_git_capabilities {
+        return None;
+    }
+
+    Some(
+        "Built-in git tools available here: git_status, git_diff, git_log, git_show, git_add, git_commit."
+            .to_string(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2373,6 +2401,21 @@ cal.js
             mutating_tool_read_only_conflict_prompt("add calculator.rs", "write_file").is_none(),
             "explicit mutating intent should not be blocked"
         );
+    }
+
+    #[test]
+    fn test_builtin_supported_git_tools_response_lists_only_supported_tools() {
+        let response = builtin_supported_git_tools_response("what other git tools can you call")
+            .expect("expected capability response");
+        assert!(response.contains("git_status"));
+        assert!(response.contains("git_diff"));
+        assert!(response.contains("git_log"));
+        assert!(response.contains("git_show"));
+        assert!(response.contains("git_add"));
+        assert!(response.contains("git_commit"));
+        assert!(!response.contains("git_clone"));
+        assert!(!response.contains("git_init"));
+        assert!(builtin_supported_git_tools_response("show the git diff").is_none());
     }
 
     #[test]
@@ -2949,6 +2992,32 @@ data: {"type":"message_stop"}"#.to_string(),
         } else {
             panic!("expected tool_result blocks");
         }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_git_tool_capability_query_short_circuits_without_api_round() -> Result<()> {
+        let mock_api_client = ApiClient::new_mock(Arc::new(
+            crate::api::mock_client::MockApiClient::new(vec![]),
+        ));
+        let mut manager = ConversationManager::new_mock(mock_api_client, HashMap::new());
+
+        let response = manager
+            .send_message("what other git tools can you call".to_string(), None)
+            .await?;
+
+        assert!(response.contains("git_status"));
+        assert!(response.contains("git_diff"));
+        assert!(response.contains("git_log"));
+        assert!(response.contains("git_show"));
+        assert!(response.contains("git_add"));
+        assert!(response.contains("git_commit"));
+        assert_eq!(
+            manager.api_messages.len(),
+            2,
+            "capability response should not call API or create extra rounds"
+        );
 
         Ok(())
     }

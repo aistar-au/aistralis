@@ -114,6 +114,28 @@ explicit regression tests.
   - Added regression tests for read-only intent detection and for preventing approval-overlay churn when a model attempts `write_file` on a read-only request.
   - Strengthened API system prompt instructions to keep read-only requests on read-only tool paths unless the user explicitly asks for changes.
 
+### Git Tool Capability Accuracy Follow-up (2026-02-22)
+- Dispatcher: codex-gpt5
+- Commit: pending (pre-commit review requested)
+- Files changed:
+  - `src/state/conversation.rs` (+69 -0)
+  - `src/api/client.rs` (+11 -0)
+- Line references:
+  - `src/state/conversation.rs:124`
+  - `src/state/conversation.rs:1904`
+  - `src/state/conversation.rs:2407`
+  - `src/state/conversation.rs:3000`
+  - `src/api/client.rs:33`
+  - `src/api/client.rs:725`
+- Validation:
+  - `cargo test git_tool_capability -- --nocapture` : pass
+  - `cargo test --all-targets` : pass
+  - `cargo clippy --all-targets -- -D warnings` : pass
+- Notes:
+  - Added deterministic short-circuit handling for capability-style prompts such as “what other git tools can you call”, returning only supported built-in git tools.
+  - Prevents unsupported git-tool claims (`git_clone`, `git_init`, `git_remote`, etc.) in this capability path.
+  - Added explicit system-prompt constraints and regression tests to keep git-tool capability claims aligned with implemented tool definitions.
+
 ## External Review Notes (verbatim)
 
 **Thanks for sharing the full `CONTRIBUTING.md` + source map!**  
