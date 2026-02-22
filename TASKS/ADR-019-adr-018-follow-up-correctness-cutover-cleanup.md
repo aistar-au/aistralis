@@ -65,12 +65,12 @@ Each dispatcher must update this section in-place when work is completed.
 Do not create parallel checklists in other docs.
 
 - [ ] **B1** Unicode-safe streaming delta slicing
-- [ ] **U1** Typed scroll/control events (remove text sentinels)
-- [ ] **U4** Production binary cutover to managed TUI path
-- [ ] **D1** Promote required editor/render logic from test-only to production modules
-- [ ] **D2** Resolve `StreamBlock*` no-op dispatch (wire or remove)
-- [ ] **U2** Simplify streaming rendering to single-responsibility flow
-- [ ] **U3** Remove `#[cfg(test)]` field layout drift on `TuiMode`
+- [x] **U1** Typed scroll/control events (remove text sentinels)
+- [x] **U4** Production binary cutover to managed TUI path
+- [x] **D1** Promote required editor/render logic from test-only to production modules
+- [x] **D2** Resolve `StreamBlock*` no-op dispatch (wire or remove)
+- [x] **U2** Simplify streaming rendering to single-responsibility flow
+- [x] **U3** Remove `#[cfg(test)]` field layout drift on `TuiMode`
 
 ## Dispatcher reporting contract (mandatory per checklist item)
 
@@ -94,6 +94,115 @@ When checking a box above, append an evidence block under this section:
 
 Line insertion/deletion counts must come from `git diff --numstat` (or equivalent)
 for the exact commit that closes the checklist item.
+
+### U1 - Typed scroll/control events; removed text sentinels
+- Dispatcher: codex-gpt5
+- Commit: pending (pre-commit review requested)
+- Files changed:
+  - `src/runtime/frontend.rs` (+20 -0)
+  - `src/runtime/mode.rs` (+8 -0)
+  - `src/runtime/loop.rs` (+3 -9)
+  - `src/app.rs` (+138 -92)
+- Line references:
+  - `src/runtime/frontend.rs:3`
+  - `src/runtime/mode.rs:10`
+  - `src/runtime/loop.rs:33`
+  - `src/app.rs:423`
+- Validation:
+  - `cargo test --all-targets` : pass
+- Notes:
+  - Replaced text-sentinel scroll paths with typed `UserInputEvent::Scroll { target, action }`.
+  - Removed sentinel parsing constants/handlers from `TuiMode` path.
+
+### U4 - Production cutover to managed TUI path
+- Dispatcher: codex-gpt5
+- Commit: pending (pre-commit review requested)
+- Files changed:
+  - `src/bin/vex.rs` (+274 -102)
+- Line references:
+  - `src/bin/vex.rs:14`
+  - `src/bin/vex.rs:229`
+  - `src/bin/vex.rs:322`
+- Validation:
+  - `cargo test --all-targets` : pass
+- Notes:
+  - Replaced append-only frontend with `ManagedTuiFrontend` wired to ratatui/crossterm runtime path.
+  - `vex` binary now runs the managed TUI adapter in production execution.
+
+### D1 - Promote required render logic to production runtime path
+- Dispatcher: codex-gpt5
+- Commit: pending (pre-commit review requested)
+- Files changed:
+  - `src/app.rs` (+138 -92)
+  - `src/bin/vex.rs` (+274 -102)
+- Line references:
+  - `src/app.rs:127`
+  - `src/app.rs:163`
+  - `src/bin/vex.rs:287`
+  - `src/bin/vex.rs:289`
+- Validation:
+  - `cargo test --all-targets` : pass
+- Notes:
+  - Exposed production-safe `TuiMode` render/status accessors used by managed frontend.
+  - Production path now exercises `ui/layout.rs`, `ui/render.rs`, and `terminal.rs`.
+
+### D2 - Resolve StreamBlock no-op dispatch
+- Dispatcher: codex-gpt5
+- Commit: pending (pre-commit review requested)
+- Files changed:
+  - `src/app.rs` (+138 -92)
+- Line references:
+  - `src/app.rs:496`
+  - `src/app.rs:499`
+  - `src/app.rs:508`
+- Validation:
+  - `cargo test --all-targets` : pass
+- Notes:
+  - Replaced no-op `StreamBlock*` match arms with active block-state wiring in `TuiMode`.
+  - Block lifecycle updates now mutate state rather than being ignored.
+
+### U2 - Simplify streaming rendering to single-responsibility flow
+- Dispatcher: codex-gpt5
+- Commit: pending (pre-commit review requested)
+- Files changed:
+  - `src/bin/vex.rs` (+274 -102)
+- Line references:
+  - `src/bin/vex.rs:277`
+  - `src/bin/vex.rs:289`
+- Validation:
+  - `cargo test --all-targets` : pass
+- Notes:
+  - Removed old append frontend dual streaming print paths.
+  - Managed frontend now performs one frame render path via ui renderer.
+
+### U3 - Remove `#[cfg(test)]` TuiMode field/layout drift
+- Dispatcher: codex-gpt5
+- Commit: pending (pre-commit review requested)
+- Files changed:
+  - `src/app.rs` (+138 -92)
+- Line references:
+  - `src/app.rs:84`
+  - `src/app.rs:103`
+  - `src/app.rs:127`
+  - `src/app.rs:353`
+- Validation:
+  - `cargo test --all-targets` : pass
+- Notes:
+  - `repo_label` and status helpers are now part of the release layout, not test-only fields.
+  - Reduced test/release divergence for `TuiMode` state/behavior.
+
+### Dead-Code Audit - Prune orphan runtime event stub after cutover
+- Dispatcher: codex-gpt5
+- Commit: pending (pre-commit review requested)
+- Files changed:
+  - `src/runtime.rs` (+0 -3)
+  - `src/runtime/event.rs` (+0 -10)
+- Line references:
+  - `src/runtime.rs:1`
+- Validation:
+  - `cargo test --all-targets` : pass
+- Notes:
+  - Removed unused `runtime::event` module that was compile-shape-only and not on production path.
 
 ## Gating rules
 

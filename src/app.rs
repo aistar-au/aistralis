@@ -1,13 +1,12 @@
 use crate::api::ApiClient;
 use crate::config::Config;
 use crate::runtime::context::RuntimeContext;
-#[cfg(test)]
-use crate::runtime::frontend::UserInputEvent;
+use crate::runtime::frontend::{ScrollAction, ScrollTarget, UserInputEvent};
 use crate::runtime::mode::RuntimeMode;
 use crate::runtime::policy::sanitize_assistant_text;
 use crate::runtime::r#loop::Runtime;
 use crate::runtime::UiUpdate;
-use crate::state::{ConversationManager, ToolApprovalRequest};
+use crate::state::{ConversationManager, StreamBlock, ToolApprovalRequest};
 use crate::tools::ToolExecutor;
 use crate::ui::render::history_visual_line_count;
 #[cfg(test)]
@@ -34,18 +33,8 @@ struct PendingPatchApproval {
 
 const DEFAULT_MAX_HISTORY_LINES: usize = 2000;
 const MAX_HISTORY_LINES_ENV: &str = "VEX_MAX_HISTORY_LINES";
-const SCROLL_PAGE_UP_CMD_PREFIX: &str = "__VEX_SCROLL_PAGE_UP__:";
-const SCROLL_PAGE_DOWN_CMD_PREFIX: &str = "__VEX_SCROLL_PAGE_DOWN__:";
-const SCROLL_HOME_CMD: &str = "__VEX_SCROLL_HOME__";
-const SCROLL_END_CMD: &str = "__VEX_SCROLL_END__";
 #[cfg(test)]
 const MAX_INPUT_PANE_ROWS: usize = 6;
-const OVERLAY_SCROLL_UP_CMD: &str = "__VEX_OVERLAY_SCROLL_UP__";
-const OVERLAY_SCROLL_DOWN_CMD: &str = "__VEX_OVERLAY_SCROLL_DOWN__";
-const OVERLAY_SCROLL_PAGE_UP_CMD_PREFIX: &str = "__VEX_OVERLAY_SCROLL_PAGE_UP__:";
-const OVERLAY_SCROLL_PAGE_DOWN_CMD_PREFIX: &str = "__VEX_OVERLAY_SCROLL_PAGE_DOWN__:";
-const OVERLAY_SCROLL_HOME_CMD: &str = "__VEX_OVERLAY_SCROLL_HOME__";
-const OVERLAY_SCROLL_END_CMD: &str = "__VEX_OVERLAY_SCROLL_END__";
 
 struct HistoryState {
     lines: Vec<String>,
@@ -92,8 +81,8 @@ pub struct TuiMode {
     history_state: HistoryState,
     overlay_state: OverlayState,
     history_line_cap: usize,
-    #[cfg(test)]
     repo_label: String,
+    active_stream_blocks: std::collections::HashMap<usize, StreamBlock>,
     pending_quit: bool,
     quit_requested: bool,
 }
@@ -104,14 +93,13 @@ impl TuiMode {
             history_state: HistoryState::default(),
             overlay_state: OverlayState::default(),
             history_line_cap: resolve_history_line_cap(),
-            #[cfg(test)]
             repo_label: resolve_repo_label(),
+            active_stream_blocks: std::collections::HashMap::new(),
             pending_quit: false,
             quit_requested: false,
         }
     }
 
-    #[cfg(test)]
     fn mode_status_label(&self) -> &'static str {
         if self.overlay_active() {
             "overlay"
@@ -126,7 +114,6 @@ impl TuiMode {
         }
     }
 
-    #[cfg(test)]
     fn approval_status_label(&self) -> &'static str {
         if self.overlay_active() {
             "pending"
@@ -137,8 +124,7 @@ impl TuiMode {
         }
     }
 
-    #[cfg(test)]
-    fn status_line(&self) -> String {
+    pub fn status_line(&self) -> String {
         let history_rows = history_visual_line_count(&self.history_state.lines);
         format!(
             "mode:{} approval:{} history:{} repo:{}",
@@ -166,8 +152,29 @@ impl TuiMode {
         self.history_state.active_assistant_index
     }
 
+    pub fn history_scroll_offset(&self) -> usize {
+        self.history_state.scroll_offset
+    }
+
     pub fn quit_requested(&self) -> bool {
         self.quit_requested
+    }
+
+    pub fn pending_patch_overlay(&self) -> Option<(&str, usize)> {
+        self.overlay_state
+            .pending_patch_approval
+            .as_ref()
+            .map(|pending| (pending.patch_preview.as_str(), pending.scroll_offset))
+    }
+
+    pub fn pending_tool_overlay(&self) -> Option<(&str, &str, bool)> {
+        self.overlay_state.pending_approval.as_ref().map(|pending| {
+            (
+                pending.tool_name.as_str(),
+                pending.input_preview.as_str(),
+                self.overlay_state.auto_approve_session,
+            )
+        })
     }
 
     fn resolve_pending_approval(&mut self, approved: bool) {
@@ -214,49 +221,35 @@ impl TuiMode {
         }
     }
 
-    fn apply_patch_overlay_scroll_delta(&mut self, delta: isize) {
+    fn apply_patch_overlay_scroll_action(&mut self, action: ScrollAction) {
         if let Some(pending) = self.overlay_state.pending_patch_approval.as_mut() {
             let max = pending.patch_preview.lines().count().saturating_sub(1);
-            let current = pending.scroll_offset as isize;
-            pending.scroll_offset = current.saturating_add(delta).clamp(0, max as isize) as usize;
+            match action {
+                ScrollAction::LineUp => {
+                    pending.scroll_offset = pending.scroll_offset.saturating_sub(1);
+                }
+                ScrollAction::LineDown => {
+                    pending.scroll_offset = pending.scroll_offset.saturating_add(1).min(max);
+                }
+                ScrollAction::PageUp(step) => {
+                    pending.scroll_offset = pending.scroll_offset.saturating_sub(step.max(1));
+                }
+                ScrollAction::PageDown(step) => {
+                    pending.scroll_offset =
+                        pending.scroll_offset.saturating_add(step.max(1)).min(max);
+                }
+                ScrollAction::Home => {
+                    pending.scroll_offset = 0;
+                }
+                ScrollAction::End => {
+                    pending.scroll_offset = max;
+                }
+            }
         }
     }
 
     fn handle_patch_overlay_input(&mut self, input: &str) {
         if self.overlay_state.pending_patch_approval.is_none() {
-            return;
-        }
-
-        if input == OVERLAY_SCROLL_UP_CMD {
-            self.apply_patch_overlay_scroll_delta(-1);
-            return;
-        }
-        if input == OVERLAY_SCROLL_DOWN_CMD {
-            self.apply_patch_overlay_scroll_delta(1);
-            return;
-        }
-        if let Some(step) = input.strip_prefix(OVERLAY_SCROLL_PAGE_UP_CMD_PREFIX) {
-            if let Ok(step) = step.parse::<isize>() {
-                self.apply_patch_overlay_scroll_delta(-step.max(1));
-            }
-            return;
-        }
-        if let Some(step) = input.strip_prefix(OVERLAY_SCROLL_PAGE_DOWN_CMD_PREFIX) {
-            if let Ok(step) = step.parse::<isize>() {
-                self.apply_patch_overlay_scroll_delta(step.max(1));
-            }
-            return;
-        }
-        if input == OVERLAY_SCROLL_HOME_CMD {
-            if let Some(pending) = self.overlay_state.pending_patch_approval.as_mut() {
-                pending.scroll_offset = 0;
-            }
-            return;
-        }
-        if input == OVERLAY_SCROLL_END_CMD {
-            if let Some(pending) = self.overlay_state.pending_patch_approval.as_mut() {
-                pending.scroll_offset = pending.patch_preview.lines().count().saturating_sub(1);
-            }
             return;
         }
 
@@ -335,29 +328,14 @@ impl TuiMode {
         self.history_state.auto_follow = true;
     }
 
-    fn handle_scrollback_command(&mut self, input: &str) -> bool {
-        if let Some(step_text) = input.strip_prefix(SCROLL_PAGE_UP_CMD_PREFIX) {
-            if let Ok(step) = step_text.parse::<usize>() {
-                self.apply_page_up(step);
-            }
-            return true;
-        }
-        if let Some(step_text) = input.strip_prefix(SCROLL_PAGE_DOWN_CMD_PREFIX) {
-            if let Ok(step) = step_text.parse::<usize>() {
-                self.apply_page_down(step);
-            }
-            return true;
-        }
-        match input {
-            SCROLL_HOME_CMD => {
-                self.apply_home();
-                true
-            }
-            SCROLL_END_CMD => {
-                self.apply_end();
-                true
-            }
-            _ => false,
+    fn apply_history_scroll_action(&mut self, action: ScrollAction) {
+        match action {
+            ScrollAction::LineUp => self.apply_page_up(1),
+            ScrollAction::LineDown => self.apply_page_down(1),
+            ScrollAction::PageUp(step) => self.apply_page_up(step),
+            ScrollAction::PageDown(step) => self.apply_page_down(step),
+            ScrollAction::Home => self.apply_home(),
+            ScrollAction::End => self.apply_end(),
         }
     }
 }
@@ -370,7 +348,6 @@ fn resolve_history_line_cap() -> usize {
         .unwrap_or(DEFAULT_MAX_HISTORY_LINES)
 }
 
-#[cfg(test)]
 fn resolve_repo_label() -> String {
     std::env::var("VEX_REPO_LABEL")
         .ok()
@@ -441,6 +418,22 @@ impl Default for TuiMode {
 }
 
 impl RuntimeMode for TuiMode {
+    fn on_frontend_event(&mut self, event: UserInputEvent, ctx: &mut RuntimeContext) {
+        match event {
+            UserInputEvent::Text(input) => self.on_user_input(input, ctx),
+            UserInputEvent::Interrupt => self.on_interrupt(ctx),
+            UserInputEvent::Scroll { target, action } => {
+                if self.overlay_active() {
+                    if target == ScrollTarget::Overlay {
+                        self.apply_patch_overlay_scroll_action(action);
+                    }
+                } else if target == ScrollTarget::History {
+                    self.apply_history_scroll_action(action);
+                }
+            }
+        }
+    }
+
     fn on_user_input(&mut self, input: String, ctx: &mut RuntimeContext) {
         if self.overlay_active() {
             if self.patch_overlay_active() {
@@ -448,9 +441,6 @@ impl RuntimeMode for TuiMode {
             } else {
                 self.handle_approval_input(&input);
             }
-            return;
-        }
-        if self.handle_scrollback_command(&input) {
             return;
         }
 
@@ -501,9 +491,21 @@ impl RuntimeMode for TuiMode {
                     self.set_scroll_to_bottom();
                 }
             }
-            UiUpdate::StreamBlockStart { .. }
-            | UiUpdate::StreamBlockDelta { .. }
-            | UiUpdate::StreamBlockComplete { .. } => {}
+            UiUpdate::StreamBlockStart { index, block } => {
+                self.active_stream_blocks.insert(index, block);
+            }
+            UiUpdate::StreamBlockDelta { index, delta } => {
+                if let Some(block) = self.active_stream_blocks.get_mut(&index) {
+                    match block {
+                        StreamBlock::Thinking { content, .. } => content.push_str(&delta),
+                        StreamBlock::FinalText { content } => content.push_str(&delta),
+                        StreamBlock::ToolCall { .. } | StreamBlock::ToolResult { .. } => {}
+                    }
+                }
+            }
+            UiUpdate::StreamBlockComplete { index } => {
+                self.active_stream_blocks.remove(&index);
+            }
             UiUpdate::ToolApprovalRequest(ToolApprovalRequest {
                 tool_name,
                 input_preview,
@@ -533,6 +535,7 @@ impl RuntimeMode for TuiMode {
             UiUpdate::TurnComplete => {
                 self.resolve_pending_approval(false);
                 self.resolve_pending_patch_approval(false);
+                self.active_stream_blocks.clear();
                 self.history_state.cancel_pending = false;
                 self.history_state.turn_in_progress = false;
                 self.history_state.active_assistant_index = None;
@@ -545,6 +548,7 @@ impl RuntimeMode for TuiMode {
             UiUpdate::Error(msg) => {
                 self.resolve_pending_approval(false);
                 self.resolve_pending_patch_approval(false);
+                self.active_stream_blocks.clear();
                 self.history_state.cancel_pending = false;
                 self.push_history_line(format!("[error] {msg}"));
                 self.history_state.turn_in_progress = false;
@@ -1083,19 +1087,43 @@ mod tests {
         mode.history_state.scroll_offset = 80;
         mode.history_state.auto_follow = true;
 
-        mode.on_user_input(format!("{SCROLL_PAGE_UP_CMD_PREFIX}10"), &mut ctx);
+        mode.on_frontend_event(
+            UserInputEvent::Scroll {
+                target: ScrollTarget::History,
+                action: ScrollAction::PageUp(10),
+            },
+            &mut ctx,
+        );
         assert_eq!(mode.history_state.scroll_offset, 70);
         assert!(!mode.history_state.auto_follow);
 
-        mode.on_user_input(format!("{SCROLL_PAGE_DOWN_CMD_PREFIX}200"), &mut ctx);
+        mode.on_frontend_event(
+            UserInputEvent::Scroll {
+                target: ScrollTarget::History,
+                action: ScrollAction::PageDown(200),
+            },
+            &mut ctx,
+        );
         assert_eq!(mode.history_state.scroll_offset, 99);
         assert!(mode.history_state.auto_follow);
 
-        mode.on_user_input(SCROLL_HOME_CMD.to_string(), &mut ctx);
+        mode.on_frontend_event(
+            UserInputEvent::Scroll {
+                target: ScrollTarget::History,
+                action: ScrollAction::Home,
+            },
+            &mut ctx,
+        );
         assert_eq!(mode.history_state.scroll_offset, 0);
         assert!(!mode.history_state.auto_follow);
 
-        mode.on_user_input(SCROLL_END_CMD.to_string(), &mut ctx);
+        mode.on_frontend_event(
+            UserInputEvent::Scroll {
+                target: ScrollTarget::History,
+                action: ScrollAction::End,
+            },
+            &mut ctx,
+        );
         assert_eq!(mode.history_state.scroll_offset, 99);
         assert!(mode.history_state.auto_follow);
         assert!(
@@ -1480,7 +1508,13 @@ mod tests {
             response_tx: Some(approve_tx),
         });
 
-        mode.on_user_input(OVERLAY_SCROLL_DOWN_CMD.to_string(), &mut ctx);
+        mode.on_frontend_event(
+            UserInputEvent::Scroll {
+                target: ScrollTarget::Overlay,
+                action: ScrollAction::LineDown,
+            },
+            &mut ctx,
+        );
         assert_eq!(
             mode.overlay_state
                 .pending_patch_approval
@@ -1490,7 +1524,13 @@ mod tests {
             "down must advance diff overlay scroll"
         );
 
-        mode.on_user_input(format!("{OVERLAY_SCROLL_PAGE_DOWN_CMD_PREFIX}3"), &mut ctx);
+        mode.on_frontend_event(
+            UserInputEvent::Scroll {
+                target: ScrollTarget::Overlay,
+                action: ScrollAction::PageDown(3),
+            },
+            &mut ctx,
+        );
         assert_eq!(
             mode.overlay_state
                 .pending_patch_approval
@@ -1500,7 +1540,13 @@ mod tests {
             "page down must advance by requested step"
         );
 
-        mode.on_user_input(OVERLAY_SCROLL_END_CMD.to_string(), &mut ctx);
+        mode.on_frontend_event(
+            UserInputEvent::Scroll {
+                target: ScrollTarget::Overlay,
+                action: ScrollAction::End,
+            },
+            &mut ctx,
+        );
         assert_eq!(
             mode.overlay_state
                 .pending_patch_approval

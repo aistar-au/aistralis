@@ -1,8 +1,4 @@
-use crate::runtime::{
-    frontend::{FrontendAdapter, UserInputEvent},
-    mode::RuntimeMode,
-    UiUpdate,
-};
+use crate::runtime::{frontend::FrontendAdapter, mode::RuntimeMode, UiUpdate};
 use tokio::sync::mpsc;
 
 use super::context::RuntimeContext;
@@ -31,10 +27,7 @@ impl<M: RuntimeMode> Runtime<M> {
             }
 
             if let Some(input) = frontend.poll_user_input(&self.mode) {
-                match input {
-                    UserInputEvent::Text(text) => self.mode.on_user_input(text, ctx),
-                    UserInputEvent::Interrupt => self.mode.on_interrupt(ctx),
-                }
+                self.mode.on_frontend_event(input, ctx);
             }
 
             while let Ok(update) = self.update_rx.try_recv() {
@@ -50,6 +43,7 @@ impl<M: RuntimeMode> Runtime<M> {
 mod tests {
     use super::*;
     use crate::api::{mock_client::MockApiClient, ApiClient};
+    use crate::runtime::frontend::UserInputEvent;
     use crate::state::ConversationManager;
     use std::collections::{HashMap, VecDeque};
     use std::sync::Arc;

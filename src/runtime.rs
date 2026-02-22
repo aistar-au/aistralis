@@ -1,5 +1,4 @@
 pub mod context;
-pub mod event;
 pub mod frontend;
 pub mod r#loop;
 pub mod mode;
@@ -24,7 +23,6 @@ mod tests {
     fn test_ref_02_runtime_types_compile() {
         use crate::runtime::{
             context::RuntimeContext,
-            event::RuntimeEvent,
             frontend::{FrontendAdapter, UserInputEvent},
             mode::RuntimeMode,
         };
@@ -57,7 +55,6 @@ mod tests {
             }
         }
 
-        let _ = std::mem::size_of::<RuntimeEvent>();
         let _ = std::mem::size_of::<Option<RuntimeContext>>();
         let _ = _uses_runtime_mode_trait::<DummyMode>;
         let _ = _uses_frontend_adapter_trait::<DummyFrontend>;
