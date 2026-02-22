@@ -71,7 +71,7 @@ explicit regression tests.
 ## Evidence
 
 ### L1-L6 - Loop/enriched response correctness sweep
-- Dispatcher: codex-gpt5
+- Dispatcher: automation-agent
 - Commit: pending (pre-commit review requested)
 - Files changed:
   - `src/state/conversation.rs` (+367 -56)
@@ -100,7 +100,7 @@ explicit regression tests.
   - Regression tests were added for each bug to prevent reintroduction.
 
 ### Read-only Intent Guard Follow-up (2026-02-22)
-- Dispatcher: codex-gpt5
+- Dispatcher: automation-agent
 - Commit: pending (pre-commit review requested)
 - Files changed:
   - `src/state/conversation.rs` (+196 -0)
@@ -115,7 +115,7 @@ explicit regression tests.
   - Strengthened API system prompt instructions to keep read-only requests on read-only tool paths unless the user explicitly asks for changes.
 
 ### Git Tool Capability Accuracy Follow-up (2026-02-22)
-- Dispatcher: codex-gpt5
+- Dispatcher: automation-agent
 - Commit: pending (pre-commit review requested)
 - Files changed:
   - `src/state/conversation.rs` (+69 -0)
@@ -265,7 +265,7 @@ This is **L7** below.
 
 **Date:** 2026-02-22  
 **Status:** Accepted (L1–L6 complete, L7 added)  
-**Deciders:** Core maintainer + Grok (review)  
+**Deciders:** Core maintainer + external reviewer (review)  
 **Related tasks:** L1, L2, L3, L4, L5, L6, L7  
 **ADR chain:** ADR-018, ADR-019
 
@@ -296,13 +296,13 @@ Apply a single correctness sweep… (L1–L6 unchanged)
 
 ## Evidence
 ### L1–L6 – Loop/enriched response correctness sweep
-- Dispatcher: codex-gpt5  
+- Dispatcher: automation-agent  
 - Commit: (already landed)  
 - Files changed: `src/state/conversation.rs` (+367 -56), `src/state/stream_block.rs` (+1 -0)  
 - Validation: `cargo test --all-targets` + clippy pass
 
 ### L7 – Rich tool-response enrichment audit (2026-02-22)
-- Reviewer: Grok  
+- Reviewer: external reviewer  
 - Findings: Tool status/round completeness fixed, but model-visible enriched content still too raw → retry churn on complex tools.  
 - Files to change: `src/state/conversation.rs` (add `enrich_tool_result` + call sites)  
 - Validation target: `cargo test test_rich_tool_response_enrichment_roundtrip -- --nocapture` + full suite + `check_*` scripts  

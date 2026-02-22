@@ -96,7 +96,7 @@ Line insertion/deletion counts must come from `git diff --numstat` (or equivalen
 for the exact commit that closes the checklist item.
 
 ### U1 - Typed scroll/control events; removed text sentinels
-- Dispatcher: codex-gpt5
+- Dispatcher: automation-agent
 - Commit: pending (pre-commit review requested)
 - Files changed:
   - `src/runtime/frontend.rs` (+20 -0)
@@ -115,7 +115,7 @@ for the exact commit that closes the checklist item.
   - Removed sentinel parsing constants/handlers from `TuiMode` path.
 
 ### U4 - Production cutover to managed TUI path
-- Dispatcher: codex-gpt5
+- Dispatcher: automation-agent
 - Commit: pending (pre-commit review requested)
 - Files changed:
   - `src/bin/vex.rs` (+274 -102)
@@ -130,7 +130,7 @@ for the exact commit that closes the checklist item.
   - `vex` binary now runs the managed TUI adapter in production execution.
 
 ### D1 - Promote required render logic to production runtime path
-- Dispatcher: codex-gpt5
+- Dispatcher: automation-agent
 - Commit: pending (pre-commit review requested)
 - Files changed:
   - `src/app.rs` (+138 -92)
@@ -147,7 +147,7 @@ for the exact commit that closes the checklist item.
   - Production path now exercises `ui/layout.rs`, `ui/render.rs`, and `terminal.rs`.
 
 ### D2 - Resolve StreamBlock no-op dispatch
-- Dispatcher: codex-gpt5
+- Dispatcher: automation-agent
 - Commit: pending (pre-commit review requested)
 - Files changed:
   - `src/app.rs` (+138 -92)
@@ -162,7 +162,7 @@ for the exact commit that closes the checklist item.
   - Block lifecycle updates now mutate state rather than being ignored.
 
 ### U2 - Simplify streaming rendering to single-responsibility flow
-- Dispatcher: codex-gpt5
+- Dispatcher: automation-agent
 - Commit: pending (pre-commit review requested)
 - Files changed:
   - `src/bin/vex.rs` (+274 -102)
@@ -176,7 +176,7 @@ for the exact commit that closes the checklist item.
   - Managed frontend now performs one frame render path via ui renderer.
 
 ### U3 - Remove `#[cfg(test)]` TuiMode field/layout drift
-- Dispatcher: codex-gpt5
+- Dispatcher: automation-agent
 - Commit: pending (pre-commit review requested)
 - Files changed:
   - `src/app.rs` (+138 -92)
@@ -192,7 +192,7 @@ for the exact commit that closes the checklist item.
   - Reduced test/release divergence for `TuiMode` state/behavior.
 
 ### Dead-Code Audit - Prune orphan runtime event stub after cutover
-- Dispatcher: codex-gpt5
+- Dispatcher: automation-agent
 - Commit: pending (pre-commit review requested)
 - Files changed:
   - `src/runtime.rs` (+0 -3)
@@ -205,7 +205,7 @@ for the exact commit that closes the checklist item.
   - Removed unused `runtime::event` module that was compile-shape-only and not on production path.
 
 ### API Logging Follow-up - Consolidate API debug/error emission
-- Dispatcher: codex-gpt5
+- Dispatcher: automation-agent
 - Commit: pending (pre-commit review requested)
 - Files changed:
   - `src/api/logging.rs` (+100 -0)
@@ -229,7 +229,7 @@ for the exact commit that closes the checklist item.
   - Standardized output formatting and sink resolution with a global `VEX_API_LOG_PATH` override and fallback compatibility for `VEX_DEBUG_PAYLOAD_PATH`.
 
 ### Dead-Code Follow-up - Remove unused legacy `src/main.rs`
-- Dispatcher: codex-gpt5
+- Dispatcher: automation-agent
 - Commit: pending (pre-commit review requested)
 - Files changed:
   - `src/main.rs` (+0 -141)
@@ -245,7 +245,7 @@ for the exact commit that closes the checklist item.
   - `autobins = false` with explicit `[[bin]] path = "src/bin/vex.rs"` remains the only binary build path.
 
 ### Branding Follow-up - Standardize remaining non-vexcoder references
-- Dispatcher: codex-gpt5
+- Dispatcher: automation-agent
 - Commit: pending (pre-commit review requested)
 - Files changed:
   - `LICENSE` (+1 -1)
@@ -260,7 +260,7 @@ for the exact commit that closes the checklist item.
   - Updated docs source metadata URL to the vexcoder-branded GitHub path.
 
 ### API Logging Follow-up - Canonicalize debug path env contract
-- Dispatcher: codex-gpt5
+- Dispatcher: automation-agent
 - Commit: pending (pre-commit review requested)
 - Files changed:
   - `src/api/logging.rs` (+10 -25)
@@ -276,7 +276,7 @@ for the exact commit that closes the checklist item.
   - Logging path configuration now has one canonical env override: `VEX_API_LOG_PATH`.
 
 ### Search Policy Follow-up - Literal matching only (no regex)
-- Dispatcher: codex-gpt5
+- Dispatcher: automation-agent
 - Commit: pending (pre-commit review requested)
 - Files changed:
   - `Cargo.toml` (+1 -0)
@@ -300,7 +300,7 @@ for the exact commit that closes the checklist item.
   - Regex (regix) matching is not used and is disallowed for runtime tool search behavior.
 
 ### Runtime UX Follow-up - Normalize API transport failures and startup transcript noise
-- Dispatcher: codex-gpt5
+- Dispatcher: automation-agent
 - Commit: pending (pre-commit review requested)
 - Files changed:
   - `src/api/client.rs` (+39 -5)
@@ -323,7 +323,7 @@ for the exact commit that closes the checklist item.
   - Added binary tests for transcript signature detection to prevent regressions.
 
 ### Tool Approval Follow-up - Mandatory overlay for mutating tools in local mode
-- Dispatcher: codex-gpt5
+- Dispatcher: automation-agent
 - Commit: pending (pre-commit review requested)
 - Files changed:
   - `src/state/conversation.rs` (+80 -2)
@@ -342,7 +342,7 @@ for the exact commit that closes the checklist item.
   - Tool permission overlay shortcut copy now explicitly shows `1 yes`, `2 allow this session`, `3/esc cancel`.
 
 ### Tool Reliability Follow-up - Prevent edit_file no-op loops and accept alias arguments
-- Dispatcher: codex-gpt5
+- Dispatcher: automation-agent
 - Commit: pending (pre-commit review requested)
 - Files changed:
   - `src/state/conversation.rs` (+246 -17)
@@ -372,7 +372,7 @@ for the exact commit that closes the checklist item.
   - Added a mutating-tool loop guard that stops repeated identical `edit_file`/write-like calls and returns a loop-guard message instead of spinning through repeated approvals.
 
 ### Tool Evidence Follow-up - Clarify missing file location and stop repeated prompt churn
-- Dispatcher: codex-gpt5
+- Dispatcher: automation-agent
 - Commit: pending (pre-commit review requested)
 - Files changed:
   - `src/state/conversation.rs` (+108 -0)
@@ -390,7 +390,7 @@ for the exact commit that closes the checklist item.
   - This ensures the user is explicitly asked for edit/create location before any file mutation is attempted.
 
 ### UX Follow-up - Clear mutation summaries and viewport-aware rendering
-- Dispatcher: codex-gpt5
+- Dispatcher: automation-agent
 - Commit: pending (pre-commit review requested)
 - Files changed:
   - `src/app.rs` (+35 -4)
@@ -420,7 +420,7 @@ for the exact commit that closes the checklist item.
   - Tool-evidence hint matching was expanded (`what is in`, `read it again`, `read again`) to reduce repeated non-tool answers for file-content follow-ups.
 
 ### Turn Stability Follow-up - End turn on denied tool approval to prevent retry loops
-- Dispatcher: codex-gpt5
+- Dispatcher: automation-agent
 - Commit: pending (pre-commit review requested)
 - Files changed:
   - `src/state/conversation.rs` (+35 -7)

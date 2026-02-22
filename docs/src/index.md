@@ -65,3 +65,10 @@ ADR files are not stored in `docs/`.
 - Open dispatch ADRs: `TASKS/ADR-*.md`
 - Completed ADR records: `TASKS/completed/ADR-*.md`
 - ADR index: `TASKS/ADR-README.md`
+
+## Source Links
+
+The canonical tracked Rust source map (with raw file URLs) is maintained in:
+
+- `CONTRIBUTING.md`
+- `README.md`
