@@ -571,12 +571,30 @@ impl ConversationManager {
                         }
                     }
 
-                    let result = if approved {
-                        self.execute_tool_with_timeout(&name, &input, tool_timeout)
-                            .await
-                    } else {
-                        Err(anyhow::anyhow!("Tool execution cancelled by user"))
-                    };
+                    if !approved {
+                        let denial = render_tool_denied_message(&name);
+                        if use_structured_blocks {
+                            self.push_tool_result_block(
+                                StreamBlock::ToolResult {
+                                    tool_call_id: id.clone(),
+                                    output: denial.clone(),
+                                    is_error: true,
+                                },
+                                stream_delta_tx,
+                            );
+                        } else if stream_local_tool_events {
+                            emit_text_update(
+                                stream_delta_tx,
+                                format!("\n- [tool_error] {name}: {denial}\n"),
+                            );
+                        }
+                        emit_text_update(stream_delta_tx, denial.clone());
+                        return Ok(denial);
+                    }
+
+                    let result = self
+                        .execute_tool_with_timeout(&name, &input, tool_timeout)
+                        .await;
                     if use_structured_blocks {
                         let final_status = if approved {
                             ToolStatus::Complete
@@ -1651,6 +1669,14 @@ fn render_repeated_mutating_tool_guard_message(last_assistant_text: &str) -> Str
     )
 }
 
+fn render_tool_denied_message(tool_name: &str) -> String {
+    if tool_requires_confirmation(tool_name) {
+        format!("Stopped: approval denied for {tool_name}. No file changes were made.")
+    } else {
+        format!("Stopped: approval denied for {tool_name}. No tool actions were performed.")
+    }
+}
+
 fn render_missing_tool_evidence_guard_message(last_assistant_text: &str) -> String {
     render_loop_guard_message(
         last_assistant_text,
@@ -2481,7 +2507,7 @@ data: {"type":"message_stop"}"#.to_string(),
         );
         let mut saw_approval_request = false;
 
-        let _ = loop {
+        let final_text = loop {
             tokio::select! {
                 result = &mut send_future => break result?,
                 maybe_update = rx.recv() => {
@@ -2496,6 +2522,8 @@ data: {"type":"message_stop"}"#.to_string(),
 
         std::env::remove_var("VEX_TOOL_CONFIRM");
         assert!(saw_approval_request);
+        assert!(final_text.contains("Stopped: approval denied for write_file"));
+        assert!(final_text.contains("No file changes were made"));
         Ok(())
     }
 

@@ -419,6 +419,24 @@ for the exact commit that closes the checklist item.
   - History rendering now wraps long lines to available pane width so content is no longer cut off by window aspect ratio.
   - Tool-evidence hint matching was expanded (`what is in`, `read it again`, `read again`) to reduce repeated non-tool answers for file-content follow-ups.
 
+### Turn Stability Follow-up - End turn on denied tool approval to prevent retry loops
+- Dispatcher: codex-gpt5
+- Commit: pending (pre-commit review requested)
+- Files changed:
+  - `src/state/conversation.rs` (+35 -7)
+- Line references:
+  - `src/state/conversation.rs:574`
+  - `src/state/conversation.rs:1672`
+  - `src/state/conversation.rs:2478`
+  - `src/state/conversation.rs:2525`
+- Validation:
+  - `cargo test --all-targets` : pass
+  - `cargo clippy --all-targets -- -D warnings` : pass
+- Notes:
+  - Runtime now terminates the active turn immediately after a denied tool approval instead of feeding cancellation back into another model tool round.
+  - This prevents repeated `write_file`/`edit_file` prompt churn after deny decisions and returns a clear “approval denied” outcome.
+  - Mutating approvals explicitly report that no file changes were made.
+
 ## Gating rules
 
 1. Phase 2 cannot start before U4 + D1 are merged and green.
