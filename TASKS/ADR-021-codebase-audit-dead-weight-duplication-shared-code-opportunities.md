@@ -1,6 +1,6 @@
 # ADR-021: Codebase Audit — Dead Weight, Duplication, and Shared-Code Opportunities
 
-- **Status**: Proposed
+- **Status**: Accepted (P0 items 1–4 implemented)
 - **Date**: 2026-02-22
 - **Context**: Consolidated static review of the current `main` codebase.
 - **Goal**: Reduce maintenance drag, align production behavior with tested behavior, and remove duplicated control flow.
@@ -18,32 +18,54 @@ Items are marked as:
 ## P0 — Fix Now
 
 ### 1) `InputEditor` test-only coverage vs production behavior
-- **Status**: **Confirmed**
+- **Status**: **Completed (2026-02-22)**
 - **Evidence**:
-  - Test-only editor stack under `#[cfg(test)]` in `src/app.rs`:
-    `InputEditor`, `InputState`, `EditorSnapshot`, `InputAction`,
-    `RenderGuard`, `RenderPass`, `overlay_event_to_user_input`,
-    `input_rows_for_buffer`, `MAX_INPUT_PANE_ROWS`.
-  - Production path uses `ManagedTuiFrontend` in `src/bin/vex.rs`.
+  - Added shared production editor module: `src/ui/editor.rs`.
+  - Exported editor module from `src/ui.rs`.
+  - `src/bin/vex.rs` now owns `InputEditor` and delegates editing/submit actions through `InputAction`.
+  - Removed test-only editor implementation duplication from `src/app.rs`.
 
 ### 2) `submit_input()` trims leading whitespace
-- **Status**: **Confirmed**
+- **Status**: **Completed (2026-02-22)**
 - **Evidence**:
-  - `src/bin/vex.rs:174` uses `self.input_buffer.trim().to_string()`.
-  - `src/app.rs:731` (`InputEditor::submit`) also uses `.trim().to_string()`.
+  - Shared submit path now uses:
+    - `trim_end_matches('\n')`
+    - `trim_end_matches('\r')`
+  - Leading whitespace is preserved for submitted prompts.
 
 ### 3) Scroll metrics mismatch with wrapped rendering
-- **Status**: **Confirmed**
+- **Status**: **Completed (2026-02-22)**
 - **Evidence**:
-  - `src/ui/render.rs:77` wraps rows in `render_messages`.
-  - `src/ui/render.rs:109` `history_visual_line_count` counts only embedded `\n`.
-  - `src/app.rs:291` uses `history_visual_line_count` for max scroll math.
+  - `src/ui/render.rs` now computes visual line count with wrapping:
+    `history_visual_line_count(messages, content_width)`.
+  - Added shared width helper: `history_content_width_for_area(messages, area)`.
+  - `src/app.rs` uses width-aware count for `status_line()` and `max_scroll_offset()`.
+  - `src/bin/vex.rs` updates `TuiMode` history content width each frame before render.
 
 ### 4) UTF-8 cursor logic duplicated across test/prod editors
-- **Status**: **Confirmed**
+- **Status**: **Completed (2026-02-22)**
 - **Evidence**:
-  - Similar boundary/edit methods in `src/app.rs` test-only `InputEditor`
-    and `src/bin/vex.rs` `ManagedTuiFrontend`.
+  - Consolidated UTF-8 cursor and edit operations into `src/ui/editor.rs`.
+  - Removed duplicate cursor/edit implementations from `src/bin/vex.rs`.
+  - `src/app.rs` tests now import and exercise the shared editor module.
+
+## P0 Implementation Delta (Insertions/Deletions)
+
+Measured with:
+
+```bash
+git add -N src/ui/editor.rs
+git diff --numstat -- src/ui/editor.rs src/app.rs src/bin/vex.rs src/ui.rs src/ui/render.rs
+```
+
+| File | Insertions | Deletions |
+| :--- | ---: | ---: |
+| `src/ui/editor.rs` | 274 | 0 |
+| `src/app.rs` | 14 | 258 |
+| `src/bin/vex.rs` | 45 | 139 |
+| `src/ui.rs` | 1 | 0 |
+| `src/ui/render.rs` | 25 | 8 |
+| **Total** | **359** | **405** |
 
 ## P1 — Dead Weight / Cleanup Claims
 

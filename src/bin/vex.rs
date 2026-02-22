@@ -6,10 +6,11 @@ use vexcoder::app::{build_runtime, TuiMode};
 use vexcoder::config::Config;
 use vexcoder::runtime::frontend::{FrontendAdapter, ScrollAction, ScrollTarget, UserInputEvent};
 use vexcoder::terminal;
+use vexcoder::ui::editor::{InputAction, InputEditor};
 use vexcoder::ui::layout::split_three_pane_layout;
 use vexcoder::ui::render::{
-    input_visual_rows, render_input, render_messages, render_overlay_modal, render_status_line,
-    OverlayModal,
+    history_content_width_for_area, input_visual_rows, render_input, render_messages,
+    render_overlay_modal, render_status_line, OverlayModal,
 };
 
 const STARTUP_NOISE_GUARD: Duration = Duration::from_secs(15);
@@ -66,8 +67,7 @@ fn looks_like_terminal_transcript(text: &str) -> bool {
 struct ManagedTuiFrontend {
     terminal: terminal::TerminalType,
     quit: bool,
-    input_buffer: String,
-    cursor: usize,
+    editor: InputEditor,
     started_at: Instant,
 }
 
@@ -78,8 +78,7 @@ impl ManagedTuiFrontend {
         Ok(Self {
             terminal,
             quit: false,
-            input_buffer: String::new(),
-            cursor: 0,
+            editor: InputEditor::new(),
             started_at: Instant::now(),
         })
     }
@@ -113,76 +112,22 @@ impl ManagedTuiFrontend {
         self.started_at.elapsed() <= STARTUP_NOISE_GUARD && looks_like_terminal_transcript(text)
     }
 
-    fn clamp_cursor_to_boundary_left(&self, mut idx: usize) -> usize {
-        idx = idx.min(self.input_buffer.len());
-        while idx > 0 && !self.input_buffer.is_char_boundary(idx) {
-            idx -= 1;
+    fn map_editor_action(&mut self, action: InputAction) -> Option<UserInputEvent> {
+        match action {
+            InputAction::None => None,
+            InputAction::Interrupt => Some(UserInputEvent::Interrupt),
+            InputAction::Quit => {
+                self.quit = true;
+                None
+            }
+            InputAction::Submit(value) => {
+                if self.should_ignore_startup_submission(&value) {
+                    None
+                } else {
+                    Some(UserInputEvent::Text(value))
+                }
+            }
         }
-        idx
-    }
-
-    fn prev_char_boundary(&self, idx: usize) -> usize {
-        let i = self.clamp_cursor_to_boundary_left(idx);
-        if i == 0 {
-            return 0;
-        }
-        let mut j = i - 1;
-        while j > 0 && !self.input_buffer.is_char_boundary(j) {
-            j -= 1;
-        }
-        j
-    }
-
-    fn next_char_boundary(&self, idx: usize) -> usize {
-        let i = self.clamp_cursor_to_boundary_left(idx);
-        if i >= self.input_buffer.len() {
-            return self.input_buffer.len();
-        }
-        match self.input_buffer[i..].chars().next() {
-            Some(ch) => i + ch.len_utf8(),
-            None => self.input_buffer.len(),
-        }
-    }
-
-    fn insert_str(&mut self, value: &str) {
-        let cursor = self.clamp_cursor_to_boundary_left(self.cursor);
-        self.input_buffer.insert_str(cursor, value);
-        self.cursor = cursor + value.len();
-    }
-
-    fn backspace(&mut self) {
-        let end = self.clamp_cursor_to_boundary_left(self.cursor);
-        if end == 0 {
-            return;
-        }
-        let start = self.prev_char_boundary(end);
-        self.input_buffer.replace_range(start..end, "");
-        self.cursor = start;
-    }
-
-    fn delete(&mut self) {
-        let start = self.clamp_cursor_to_boundary_left(self.cursor);
-        if start >= self.input_buffer.len() {
-            return;
-        }
-        let end = self.next_char_boundary(start);
-        self.input_buffer.replace_range(start..end, "");
-        self.cursor = start;
-    }
-
-    fn submit_input(&mut self) -> Option<String> {
-        let value = self.input_buffer.trim().to_string();
-        if value.is_empty() {
-            return None;
-        }
-        if self.should_ignore_startup_submission(&value) {
-            self.input_buffer.clear();
-            self.cursor = 0;
-            return None;
-        }
-        self.input_buffer.clear();
-        self.cursor = 0;
-        Some(value)
     }
 
     fn map_overlay_key(&mut self, key: KeyEvent) -> Option<UserInputEvent> {
@@ -227,19 +172,6 @@ impl ManagedTuiFrontend {
 
     fn map_regular_key(&mut self, key: KeyEvent) -> Option<UserInputEvent> {
         match key.code {
-            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                Some(UserInputEvent::Interrupt)
-            }
-            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if self.input_buffer.is_empty() {
-                    self.quit = true;
-                }
-                None
-            }
-            KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.insert_str("\n");
-                None
-            }
             KeyCode::PageUp => Some(UserInputEvent::Scroll {
                 target: ScrollTarget::History,
                 action: ScrollAction::PageUp(10),
@@ -248,14 +180,18 @@ impl ManagedTuiFrontend {
                 target: ScrollTarget::History,
                 action: ScrollAction::PageDown(10),
             }),
-            KeyCode::Up => Some(UserInputEvent::Scroll {
-                target: ScrollTarget::History,
-                action: ScrollAction::LineUp,
-            }),
-            KeyCode::Down => Some(UserInputEvent::Scroll {
-                target: ScrollTarget::History,
-                action: ScrollAction::LineDown,
-            }),
+            KeyCode::Up if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(UserInputEvent::Scroll {
+                    target: ScrollTarget::History,
+                    action: ScrollAction::LineUp,
+                })
+            }
+            KeyCode::Down if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(UserInputEvent::Scroll {
+                    target: ScrollTarget::History,
+                    action: ScrollAction::LineDown,
+                })
+            }
             KeyCode::Home if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 Some(UserInputEvent::Scroll {
                     target: ScrollTarget::History,
@@ -268,43 +204,10 @@ impl ManagedTuiFrontend {
                     action: ScrollAction::End,
                 })
             }
-            KeyCode::Home => {
-                self.cursor = 0;
-                None
+            _ => {
+                let action = self.editor.apply_key(key);
+                self.map_editor_action(action)
             }
-            KeyCode::End => {
-                self.cursor = self.input_buffer.len();
-                None
-            }
-            KeyCode::Left => {
-                self.cursor = self.prev_char_boundary(self.cursor);
-                None
-            }
-            KeyCode::Right => {
-                self.cursor = self.next_char_boundary(self.cursor);
-                None
-            }
-            KeyCode::Backspace => {
-                self.backspace();
-                None
-            }
-            KeyCode::Delete => {
-                self.delete();
-                None
-            }
-            KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => {
-                self.insert_str("\n");
-                None
-            }
-            KeyCode::Enter => self.submit_input().map(UserInputEvent::Text),
-            KeyCode::Char(ch)
-                if !key.modifiers.contains(KeyModifiers::CONTROL)
-                    && !key.modifiers.contains(KeyModifiers::ALT) =>
-            {
-                self.insert_str(&ch.to_string());
-                None
-            }
-            _ => None,
         }
     }
 }
@@ -358,7 +261,7 @@ impl FrontendAdapter<TuiMode> for ManagedTuiFrontend {
                     if self.should_ignore_startup_paste(&text) {
                         return None;
                     }
-                    self.insert_str(&text);
+                    self.editor.insert_str(&text);
                     None
                 }
             }
@@ -367,21 +270,24 @@ impl FrontendAdapter<TuiMode> for ManagedTuiFrontend {
     }
 
     fn render(&mut self, mode: &TuiMode) {
-        let status = mode.status_line();
-        let history_scroll = mode.history_scroll_offset();
-        let input = self.input_buffer.as_str();
-        let cursor = self.cursor;
+        let input = self.editor.buffer().to_string();
+        let cursor = self.editor.cursor();
 
         let _ = self.terminal.draw(|frame| {
             let area = frame.area();
             frame.render_widget(Clear, area);
             let input_width = area.width.saturating_sub(2).max(1) as usize;
-            let input_rows = input_visual_rows(input, input_width).max(1) as u16;
+            let input_rows = input_visual_rows(&input, input_width).max(1) as u16;
             let panes = split_three_pane_layout(area, input_rows);
+            let history_width = history_content_width_for_area(mode.history_lines(), panes.history);
+            mode.set_history_content_width(history_width);
+
+            let status = mode.status_line();
+            let history_scroll = mode.history_scroll_offset();
 
             render_status_line(frame, panes.header, &status);
             render_messages(frame, panes.history, mode.history_lines(), history_scroll);
-            render_input(frame, panes.input, input, cursor);
+            render_input(frame, panes.input, &input, cursor);
 
             if let Some((patch_preview, scroll_offset)) = mode.pending_patch_overlay() {
                 render_overlay_modal(

@@ -82,10 +82,7 @@ pub fn render_messages(frame: &mut Frame<'_>, area: Rect, messages: &[String], s
 
     let logical_rows = expand_history_rows(messages);
     let line_number_width = logical_rows.len().max(1).to_string().len();
-    let content_width = inner
-        .width
-        .saturating_sub((line_number_width + 3) as u16)
-        .max(1) as usize;
+    let content_width = history_content_width(inner.width, line_number_width);
     let mut body: Vec<Line<'static>> = Vec::new();
     for (index, row) in logical_rows.iter().enumerate() {
         let row_style = history_row_style(row);
@@ -106,14 +103,28 @@ pub fn render_messages(frame: &mut Frame<'_>, area: Rect, messages: &[String], s
     frame.render_widget(paragraph, inner);
 }
 
-pub fn history_visual_line_count(messages: &[String]) -> usize {
+pub fn history_visual_line_count(messages: &[String], content_width: usize) -> usize {
     if messages.is_empty() {
         return 0;
     }
-    messages
+
+    let content_width = content_width.max(1);
+    expand_history_rows(messages)
         .iter()
-        .map(|message| message.split('\n').count().max(1))
+        .map(|row| wrap_input_lines(row, content_width).len().max(1))
         .sum()
+}
+
+pub fn history_content_width_for_area(messages: &[String], area: Rect) -> usize {
+    let row_count = expand_history_rows(messages).len().max(1);
+    let line_number_width = row_count.to_string().len();
+    history_content_width(area.width, line_number_width)
+}
+
+fn history_content_width(area_width: u16, line_number_width: usize) -> usize {
+    area_width
+        .saturating_sub((line_number_width + 3) as u16)
+        .max(1) as usize
 }
 
 fn expand_history_rows(messages: &[String]) -> Vec<String> {
@@ -411,7 +422,13 @@ mod tests {
             "line-a\nline-b".to_string(),
             String::new(),
         ];
-        assert_eq!(history_visual_line_count(&messages), 4);
+        assert_eq!(history_visual_line_count(&messages, 80), 4);
+    }
+
+    #[test]
+    fn history_visual_line_count_tracks_wrapped_rows() {
+        let messages = vec!["123456".to_string()];
+        assert_eq!(history_visual_line_count(&messages, 3), 2);
     }
 
     #[test]

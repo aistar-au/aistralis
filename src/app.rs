@@ -13,7 +13,8 @@ use crate::ui::render::history_visual_line_count;
 use crate::ui::render::input_visual_rows;
 use anyhow::Result;
 #[cfg(test)]
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{Event, KeyCode, KeyModifiers};
+use std::cell::Cell;
 #[cfg(test)]
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
@@ -33,6 +34,7 @@ struct PendingPatchApproval {
 
 const DEFAULT_MAX_HISTORY_LINES: usize = 2000;
 const MAX_HISTORY_LINES_ENV: &str = "VEX_MAX_HISTORY_LINES";
+const HISTORY_CONTENT_WIDTH_FALLBACK: usize = usize::MAX;
 #[cfg(test)]
 const MAX_INPUT_PANE_ROWS: usize = 6;
 
@@ -65,23 +67,12 @@ struct OverlayState {
     auto_approve_session: bool,
 }
 
-#[cfg(test)]
-#[derive(Default)]
-struct InputState {
-    buffer: String,
-    cursor: usize,
-    history: Vec<String>,
-    history_index: Option<usize>,
-    history_stash: Option<EditorSnapshot>,
-    undo_stack: Vec<EditorSnapshot>,
-    redo_stack: Vec<EditorSnapshot>,
-}
-
 pub struct TuiMode {
     history_state: HistoryState,
     overlay_state: OverlayState,
     history_line_cap: usize,
     repo_label: String,
+    history_content_width: Cell<usize>,
     active_stream_blocks: std::collections::HashMap<usize, StreamBlock>,
     pending_quit: bool,
     quit_requested: bool,
@@ -94,6 +85,7 @@ impl TuiMode {
             overlay_state: OverlayState::default(),
             history_line_cap: resolve_history_line_cap(),
             repo_label: resolve_repo_label(),
+            history_content_width: Cell::new(HISTORY_CONTENT_WIDTH_FALLBACK),
             active_stream_blocks: std::collections::HashMap::new(),
             pending_quit: false,
             quit_requested: false,
@@ -125,7 +117,8 @@ impl TuiMode {
     }
 
     pub fn status_line(&self) -> String {
-        let history_rows = history_visual_line_count(&self.history_state.lines);
+        let history_rows =
+            history_visual_line_count(&self.history_state.lines, self.history_content_width.get());
         format!(
             "mode:{} approval:{} history:{} repo:{}",
             self.mode_status_label(),
@@ -175,6 +168,10 @@ impl TuiMode {
                 self.overlay_state.auto_approve_session,
             )
         })
+    }
+
+    pub fn set_history_content_width(&self, width: usize) {
+        self.history_content_width.set(width.max(1));
     }
 
     fn resolve_pending_approval(&mut self, approved: bool) {
@@ -288,7 +285,8 @@ impl TuiMode {
     }
 
     fn max_scroll_offset(&self) -> usize {
-        history_visual_line_count(&self.history_state.lines).saturating_sub(1)
+        history_visual_line_count(&self.history_state.lines, self.history_content_width.get())
+            .saturating_sub(1)
     }
 
     fn set_scroll_to_bottom(&mut self) {
@@ -616,249 +614,6 @@ fn summarize_tool_approval_context(tool_name: &str, input_preview: &str) -> Stri
     }
 }
 
-#[derive(Clone)]
-#[cfg(test)]
-struct EditorSnapshot {
-    buffer: String,
-    cursor: usize,
-}
-
-#[cfg(test)]
-struct InputEditor {
-    input_state: InputState,
-}
-
-#[cfg(test)]
-enum InputAction {
-    None,
-    Submit(String),
-    Interrupt,
-    Quit,
-}
-
-#[cfg(test)]
-impl InputEditor {
-    fn new() -> Self {
-        Self {
-            input_state: InputState::default(),
-        }
-    }
-
-    fn clamp_cursor_to_boundary_left(&self, mut idx: usize) -> usize {
-        idx = idx.min(self.input_state.buffer.len());
-        while idx > 0 && !self.input_state.buffer.is_char_boundary(idx) {
-            idx -= 1;
-        }
-        idx
-    }
-
-    fn prev_char_boundary(&self, idx: usize) -> usize {
-        let i = self.clamp_cursor_to_boundary_left(idx);
-        if i == 0 {
-            return 0;
-        }
-        let mut j = i - 1;
-        while j > 0 && !self.input_state.buffer.is_char_boundary(j) {
-            j -= 1;
-        }
-        j
-    }
-
-    fn next_char_boundary(&self, idx: usize) -> usize {
-        let i = self.clamp_cursor_to_boundary_left(idx);
-        if i >= self.input_state.buffer.len() {
-            return self.input_state.buffer.len();
-        }
-        match self.input_state.buffer[i..].chars().next() {
-            Some(ch) => i + ch.len_utf8(),
-            None => self.input_state.buffer.len(),
-        }
-    }
-
-    fn snapshot(&self) -> EditorSnapshot {
-        EditorSnapshot {
-            buffer: self.input_state.buffer.clone(),
-            cursor: self.input_state.cursor,
-        }
-    }
-
-    fn push_undo(&mut self) {
-        self.input_state.undo_stack.push(self.snapshot());
-        self.input_state.redo_stack.clear();
-    }
-
-    fn restore(&mut self, snap: EditorSnapshot) {
-        self.input_state.buffer = snap.buffer;
-        self.input_state.cursor = self.clamp_cursor_to_boundary_left(snap.cursor);
-    }
-
-    fn insert_str(&mut self, value: &str) {
-        self.input_state.history_index = None;
-        self.input_state.history_stash = None;
-        let cursor = self.clamp_cursor_to_boundary_left(self.input_state.cursor);
-        self.push_undo();
-        self.input_state.buffer.insert_str(cursor, value);
-        self.input_state.cursor = cursor + value.len();
-    }
-
-    fn backspace(&mut self) {
-        let end = self.clamp_cursor_to_boundary_left(self.input_state.cursor);
-        if end == 0 {
-            return;
-        }
-        self.input_state.history_index = None;
-        self.input_state.history_stash = None;
-        let start = self.prev_char_boundary(end);
-        self.push_undo();
-        self.input_state.buffer.replace_range(start..end, "");
-        self.input_state.cursor = start;
-    }
-
-    fn delete(&mut self) {
-        let start = self.clamp_cursor_to_boundary_left(self.input_state.cursor);
-        if start >= self.input_state.buffer.len() {
-            return;
-        }
-        self.input_state.history_index = None;
-        self.input_state.history_stash = None;
-        let end = self.next_char_boundary(start);
-        self.push_undo();
-        self.input_state.buffer.replace_range(start..end, "");
-        self.input_state.cursor = start;
-    }
-
-    fn submit(&mut self) -> Option<String> {
-        let value = self.input_state.buffer.trim().to_string();
-        if value.is_empty() {
-            return None;
-        }
-        self.input_state
-            .history
-            .push(self.input_state.buffer.clone());
-        self.input_state.history_index = None;
-        self.input_state.history_stash = None;
-        self.push_undo();
-        self.input_state.buffer.clear();
-        self.input_state.cursor = 0;
-        Some(value)
-    }
-
-    fn history_up(&mut self) {
-        if self.input_state.history.is_empty() {
-            return;
-        }
-
-        if self.input_state.history_index.is_none() {
-            self.input_state.history_stash = Some(self.snapshot());
-        }
-        let next_index = match self.input_state.history_index {
-            Some(idx) if idx > 0 => idx - 1,
-            Some(_) => 0,
-            None => self.input_state.history.len().saturating_sub(1),
-        };
-        self.input_state.history_index = Some(next_index);
-        self.input_state.buffer = self.input_state.history[next_index].clone();
-        self.input_state.cursor = self.input_state.buffer.len();
-    }
-
-    fn history_down(&mut self) {
-        let Some(idx) = self.input_state.history_index else {
-            return;
-        };
-
-        if idx + 1 >= self.input_state.history.len() {
-            self.input_state.history_index = None;
-            if let Some(stash) = self.input_state.history_stash.take() {
-                self.restore(stash);
-            } else {
-                self.input_state.buffer.clear();
-                self.input_state.cursor = 0;
-            }
-        } else {
-            let next = idx + 1;
-            self.input_state.history_index = Some(next);
-            self.input_state.buffer = self.input_state.history[next].clone();
-            self.input_state.cursor = self.input_state.buffer.len();
-        }
-    }
-
-    fn undo(&mut self) {
-        if let Some(previous) = self.input_state.undo_stack.pop() {
-            self.input_state.redo_stack.push(self.snapshot());
-            self.restore(previous);
-        }
-    }
-
-    fn redo(&mut self) {
-        if let Some(next) = self.input_state.redo_stack.pop() {
-            self.input_state.undo_stack.push(self.snapshot());
-            self.restore(next);
-        }
-    }
-
-    fn apply_event(&mut self, event: Event) -> InputAction {
-        match event {
-            Event::Paste(text) => {
-                self.insert_str(&text);
-                InputAction::None
-            }
-            Event::Key(key) => self.apply_key(key),
-            _ => InputAction::None,
-        }
-    }
-
-    fn apply_key(&mut self, key: KeyEvent) -> InputAction {
-        match key.code {
-            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if self.input_state.buffer.is_empty() {
-                    return InputAction::Quit;
-                }
-            }
-            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                return InputAction::Interrupt;
-            }
-            KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.insert_str("\n");
-            }
-            KeyCode::Char('z') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.undo();
-            }
-            KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.redo();
-            }
-            KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => {
-                self.insert_str("\n");
-            }
-            KeyCode::Enter => {
-                if let Some(value) = self.submit() {
-                    return InputAction::Submit(value);
-                }
-            }
-            KeyCode::Backspace => self.backspace(),
-            KeyCode::Delete => self.delete(),
-            KeyCode::Left => {
-                self.input_state.cursor = self.prev_char_boundary(self.input_state.cursor);
-            }
-            KeyCode::Right => {
-                self.input_state.cursor = self.next_char_boundary(self.input_state.cursor);
-            }
-            KeyCode::Home => self.input_state.cursor = 0,
-            KeyCode::End => self.input_state.cursor = self.input_state.buffer.len(),
-            KeyCode::Up => self.history_up(),
-            KeyCode::Down => self.history_down(),
-            KeyCode::Char(ch) => self.insert_str(&ch.to_string()),
-            KeyCode::Esc => {
-                if self.input_state.buffer.is_empty() {
-                    return InputAction::Submit("esc".to_string());
-                }
-            }
-            _ => {}
-        }
-
-        InputAction::None
-    }
-}
-
 #[cfg(test)]
 fn overlay_event_to_user_input(event: Event) -> Option<UserInputEvent> {
     match event {
@@ -922,6 +677,7 @@ pub fn build_runtime(config: Config) -> Result<(Runtime<TuiMode>, RuntimeContext
 mod tests {
     use super::*;
     use crate::api::{mock_client::MockApiClient, ApiClient};
+    use crate::ui::editor::{InputAction, InputEditor};
     use crossterm::event::KeyEvent;
     use futures::FutureExt;
     use std::collections::HashMap;
