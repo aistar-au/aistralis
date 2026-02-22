@@ -63,6 +63,10 @@ This repository uses mdBook + GitHub Pages for documentation.
 
 ADR files are stored under `TASKS/`, not under `docs/`.
 
+Repository-wide raw URL map (all tracked files):
+
+- `TASKS/completed/REPO-RAW-URL-MAP.md`
+
 ## Rust Source Map (`*.rs`)
 
 Tracked Rust files in this repository (`git ls-files '*.rs'`):

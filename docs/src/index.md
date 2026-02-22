@@ -72,3 +72,4 @@ The canonical tracked Rust source map (with raw file URLs) is maintained in:
 
 - `CONTRIBUTING.md`
 - `README.md`
+- `TASKS/completed/REPO-RAW-URL-MAP.md` (all tracked repository files)
