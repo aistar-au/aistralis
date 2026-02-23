@@ -222,49 +222,30 @@ pub(super) fn append_incremental_suffix(existing: &mut String, incoming: &str) -
     if incoming.is_empty() {
         return String::new();
     }
-    if existing.is_empty() {
-        existing.push_str(incoming);
-        return incoming.to_string();
-    }
-    if existing == incoming {
-        return String::new();
-    }
+
+    // If the incoming string starts with the existing content, it's a cumulative update.
+    // We extract the new part and append it.
     if incoming.starts_with(existing.as_str()) {
-        let suffix = incoming[existing.len()..].to_string();
-        existing.clear();
-        existing.push_str(incoming);
-        return suffix;
+        let suffix = &incoming[existing.len()..];
+        if suffix.is_empty() {
+            return String::new();
+        }
+        let suffix_owned = suffix.to_string();
+        existing.push_str(&suffix_owned);
+        return suffix_owned;
     }
+
+    // If the existing content already starts with the incoming string, it's a redundant
+    // prefix or a re-transmission of an earlier part of the stream.
     if existing.starts_with(incoming) {
         return String::new();
     }
 
-    let max_overlap = existing.len().min(incoming.len());
-    let mut overlap = 0usize;
-    for idx in incoming
-        .char_indices()
-        .map(|(idx, _)| idx)
-        .chain(std::iter::once(incoming.len()))
-    {
-        if idx > max_overlap {
-            break;
-        }
-        if existing.ends_with(&incoming[..idx]) {
-            overlap = idx;
-        }
-    }
-    if overlap == incoming.len()
-        && existing.ends_with(incoming)
-        && incoming.len().saturating_mul(2) < existing.len()
-    {
-        overlap = 0;
-    }
-
-    let suffix = incoming[overlap..].to_string();
-    if !suffix.is_empty() {
-        existing.push_str(&suffix);
-    }
-    suffix
+    // In all other cases, we treat the incoming string as a new delta.
+    // We specifically avoid searching for partial overlaps between the end of 'existing'
+    // and the start of 'incoming' to prevent data loss when the assistant repeats text.
+    existing.push_str(incoming);
+    incoming.to_string()
 }
 
 pub(super) fn stream_local_tool_events_enabled() -> bool {
