@@ -129,14 +129,6 @@ impl ConversationManager {
         output: &str,
         summary: ReadFileSnapshotSummary,
     ) -> String {
-        if !self.client.is_local_endpoint() {
-            return format_read_file_snapshot_message(
-                path,
-                summary,
-                ReadFileSummaryMessageStyle::History,
-            );
-        }
-
         match summary {
             ReadFileSnapshotSummary::Unchanged { .. } => format_read_file_snapshot_message(
                 path,
