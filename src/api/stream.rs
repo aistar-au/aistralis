@@ -5,7 +5,7 @@ use serde::Deserialize;
 
 #[derive(Default)]
 pub struct StreamParser {
-    buffer: String,
+    buffer: Vec<u8>,
     openai_tools: Vec<OpenAiToolState>,
 }
 
@@ -64,22 +64,25 @@ impl StreamParser {
     }
 
     pub fn process(&mut self, chunk: &[u8]) -> Result<Vec<StreamEvent>> {
-        self.buffer.push_str(&String::from_utf8_lossy(chunk));
-        if self.buffer.contains('\r') {
-            self.buffer = self.buffer.replace("\r\n", "\n");
+        const MAX_BUFFER_SIZE: usize = 1024 * 1024; // 1MB limit
+        if self.buffer.len() + chunk.len() > MAX_BUFFER_SIZE {
+            anyhow::bail!("Stream buffer limit exceeded");
         }
+        self.buffer.extend_from_slice(chunk);
 
         let mut events = Vec::new();
-        let mut start = 0;
 
-        while let Some(end) = self.buffer[start..].find("\n\n") {
-            let event_end = start + end + 2;
-            let event_text = &self.buffer[start..start + end];
+        while let Some((pos, delim_len)) = self.find_delimiter() {
+            let end = pos + delim_len;
+            let frame_bytes = self.buffer[..pos].to_vec();
+            self.buffer.drain(..end);
 
+            let frame_text = String::from_utf8(frame_bytes)?;
+            
             let mut event_type = None;
             let mut data_lines = Vec::new();
 
-            for line in event_text.lines() {
+            for line in frame_text.lines() {
                 if line.is_empty() || line.starts_with(':') {
                     continue;
                 }
@@ -115,15 +118,19 @@ impl StreamParser {
                     }
                 }
             }
-
-            start = event_end;
-        }
-
-        if start > 0 {
-            self.buffer.drain(..start);
         }
 
         Ok(events)
+    }
+
+    fn find_delimiter(&self) -> Option<(usize, usize)> {
+        if let Some(pos) = self.buffer.windows(2).position(|w| w == b"\n\n") {
+            return Some((pos, 2));
+        }
+        if let Some(pos) = self.buffer.windows(4).position(|w| w == b"\r\n\r\n") {
+            return Some((pos, 4));
+        }
+        None
     }
 
     fn parse_openai_chunk(&mut self, json_data: &str) -> Option<Vec<StreamEvent>> {
