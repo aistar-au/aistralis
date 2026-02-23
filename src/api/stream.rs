@@ -78,7 +78,7 @@ impl StreamParser {
             self.buffer.drain(..end);
 
             let frame_text = String::from_utf8(frame_bytes)?;
-            
+
             let mut event_type = None;
             let mut data_lines = Vec::new();
 
