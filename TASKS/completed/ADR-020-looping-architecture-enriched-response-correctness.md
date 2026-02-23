@@ -79,6 +79,10 @@ explicit regression tests.
 - [x] **L6** Remove dead test-only tool execution path
 - [x] **REF-10** Conversation module split with thin entrypoint + submodules
 
+L7 progress note (2026-02-24):
+- Remote-model `read_file` context visibility shipped via PR #15 (`run-2026-02-24-030001`), which closes the highest-impact model-visibility gap from the L7 enrichment track.
+- Full multi-tool rich-response aggregation/enrichment is still tracked as remaining L7 scope.
+
 ## Evidence
 
 ### L1-L6 - Loop/enriched response correctness sweep
@@ -179,6 +183,26 @@ explicit regression tests.
 - Validation:
   - `cargo test test_conversation_module_structure -- --nocapture` : pass
   - `cargo test --all-targets` : pass
+
+## Promotion Updates (2026-02-23 to 2026-02-24)
+
+### PR #14 — UTF-8 stream fragmentation hardening
+- Run: `run-2026-02-23-162456`
+- Merge commit: `15f7ffd` (feature commit: `d2d6f67`)
+- Scope: Stream parser moved to byte-buffer ingestion to avoid per-chunk UTF-8 corruption risk.
+- ADR linkage: Supports ADR-020 reliability goals and ADR-021 SSE follow-up items.
+
+### PR #15 — Remote `read_file` model-context visibility
+- Run: `run-2026-02-24-030001`
+- Merge commit: `43506f1` (feature commit: `cb64d1b`)
+- Scope: `format_read_file_result_for_model_context` now includes content for remote endpoints on first/changed reads.
+- ADR linkage: Partial L7 completion for enriched tool-response fidelity.
+
+### PR #16 — Streaming text dedupe correctness
+- Run: `run-2026-02-24-040000`
+- Merge commit: `9eda7cc` (feature commit: `3aaceae`)
+- Scope: `append_incremental_suffix` now preserves legitimate repeated text and avoids destructive partial-overlap stripping.
+- ADR linkage: Revalidates and reinforces L3 correctness after later refactors.
 
 ## External Review Notes (verbatim)
 

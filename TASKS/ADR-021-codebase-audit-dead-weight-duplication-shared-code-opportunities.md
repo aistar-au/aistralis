@@ -321,16 +321,13 @@ git diff --numstat -- src/runtime/loop.rs
     explicit user/model override path.
 
 ### 29) `append_incremental_suffix` overlap algorithm cost on large deltas
-- **Status**: **Partially accurate**
+- **Status**: **Completed (2026-02-24 via PR #16 / run-2026-02-24-040000)**
 - **Evidence**:
-  - `src/state/conversation/streaming.rs::append_incremental_suffix` iterates
-    char boundaries and calls `ends_with` repeatedly.
-  - Correct for UTF-8 safety, but can be expensive for very large streaming
-    payloads.
-- **Priority**: **P3**
-- **Follow-up**:
-  - Keep current logic for correctness; consider optimized overlap matching if
-    profiling shows this path is hot.
+  - `src/state/conversation/streaming.rs::append_incremental_suffix` no longer
+    performs repeated overlap scans.
+  - Logic now keeps only safe cumulative/prefix checks and appends other deltas
+    as-is, closing both correctness and overlap-scan concerns.
+- **Priority**: **Closed**
 
 ### 30) `RuntimeContext` `RwLock` optimization suggestion
 - **Status**: **Not accurate (current tree)**
@@ -343,16 +340,13 @@ git diff --numstat -- src/runtime/loop.rs
 ## Additional Triage from Latest ADR-022 Draft (Critical First)
 
 ### 31) UTF-8 fragmentation risk in SSE chunk ingestion (`from_utf8_lossy` per chunk)
-- **Status**: **Confirmed**
+- **Status**: **Completed (2026-02-23 via PR #14 / run-2026-02-23-162456)**
 - **Evidence**:
-  - `src/api/stream.rs::process` currently appends
-    `String::from_utf8_lossy(chunk)` directly into parser buffer.
-  - Multi-byte UTF-8 sequences split across network chunks can be replaced with
-    `U+FFFD`, causing irreversible stream-text corruption.
-- **Priority**: **P1**
-- **Follow-up**:
-  - Move parser buffering to raw bytes and decode only on complete frame
-    boundaries (or with an incremental UTF-8 decoder).
+  - `src/api/stream.rs::StreamParser` now buffers raw bytes (`Vec<u8>`) and
+    appends incoming chunks via `extend_from_slice`.
+  - Frame delimiter detection occurs on bytes; decoding is deferred until frame
+    extraction, removing per-chunk lossy conversion.
+- **Priority**: **Closed**
 
 ### 32) `KeyEventKind::Release` filtering portability concern
 - **Status**: **Partially accurate**
@@ -391,13 +385,24 @@ git diff --numstat -- src/runtime/loop.rs
   - `src/runtime/mod.rs` does not exist.
 - **Priority**: **N/A**
 
+## Promotion Traceability (2026-02-23 to 2026-02-24)
+
+- PR #14 (`run-2026-02-23-162456`, merge `15f7ffd`): closed item 31 (UTF-8
+  fragmentation risk) and advanced SSE parser hardening.
+- PR #15 (`run-2026-02-24-030001`, merge `43506f1`): restored remote
+  `read_file` content visibility in model context
+  (`src/state/conversation/history.rs`), addressing a critical reliability gap
+  discovered during follow-up audits.
+- PR #16 (`run-2026-02-24-040000`, merge `9eda7cc`): closed item 29 by
+  replacing destructive overlap stripping in stream delta dedupe.
+
 ## Immediate Dispatch Recommendation
 
 1. Keep P0 items 1–4 and P0.17 closed.
-2. Address P1.18, P1.19, P1.26, and P1.31.
+2. Address remaining P1 items: P1.18, P1.19, and P1.26.
 3. Treat items 21, 23, 27, 30, 34, and 35 as closed (`not accurate`).
 4. Keep items 22, 24, 25, 28, and 32 as P2 design/observability follow-ups.
-5. Keep items 29 and 33 as P3 optimization/tuning candidates.
+5. Keep item 33 as a P3 optimization/tuning candidate.
 6. Continue P2/P3 refactors in ADR-backed, test-gated batches.
 
 ## Validation Commands
