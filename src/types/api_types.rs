@@ -58,6 +58,8 @@ pub enum StreamEvent {
         delta: MessageDelta,
     },
     MessageStop,
+    // CRIT-01: Add an Error variant to surface SSE parsing failures to the UI.
+    Error(String),
     #[serde(other)]
     Unknown,
 }
