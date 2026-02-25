@@ -250,6 +250,14 @@ impl ConversationManager {
                                 );
                             }
                         }
+                        StreamEvent::Error(error_message) => {
+                            if !use_structured_blocks && stream_server_events {
+                                emit_text_update(
+                                    stream_delta_tx,
+                                    format!("\n* Event: stream_error={error_message}\n"),
+                                );
+                            }
+                        }
                         StreamEvent::Unknown => {
                             if !use_structured_blocks && stream_server_events {
                                 emit_text_update(
