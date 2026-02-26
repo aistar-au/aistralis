@@ -111,6 +111,14 @@ mod tests {
             self.interrupt_calls += 1;
         }
 
+        fn on_frontend_event(&mut self, event: UserInputEvent, ctx: &mut RuntimeContext) {
+            match event {
+                UserInputEvent::Text(input) => self.on_user_input(input, ctx),
+                UserInputEvent::Interrupt => self.on_interrupt(ctx),
+                UserInputEvent::Scroll { .. } => {}
+            }
+        }
+
         fn is_turn_in_progress(&self) -> bool {
             false
         }
